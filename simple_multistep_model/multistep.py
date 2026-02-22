@@ -338,6 +338,58 @@ class MultistepModel:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# DataFrameMultistepModel (thin pandas wrapper)
+# ---------------------------------------------------------------------------
+
+
+class DataFrameMultistepModel:
+    """Thin pandas wrapper around MultistepModel.
+
+    Handles DataFrame <-> xarray conversion so the user works
+    entirely in pandas. No target transforms — do those in your
+    data-transform function.
+    """
+
+    def __init__(
+        self,
+        one_step_model: OneStepModel,
+        n_target_lags: int,
+        target_variable: str = "disease_cases",
+    ) -> None:
+        self._model = MultistepModel(one_step_model, n_target_lags)
+        self._target_variable = target_variable
+
+    @property
+    def n_target_lags(self) -> int:
+        return self._model.n_target_lags
+
+    def fit(self, X, y) -> None:
+        """Fit on feature and target DataFrames (multi-location).
+
+        Args:
+            X: DataFrame with [time_period, location, feat1, ...] or None.
+            y: DataFrame with [time_period, location, <target_variable>].
+        """
+        y_xr = target_to_xarray(y, self._target_variable)
+        X_xr = features_to_xarray(X) if X is not None else None
+        self._model.fit_multi(y_xr, X_xr)
+
+    def predict(self, y_historic, X_future, n_steps: int, n_samples: int):
+        """Predict from DataFrames, return xarray (location, trajectory, step).
+
+        Args:
+            y_historic: DataFrame with [time_period, location, <target_variable>].
+            X_future: DataFrame with [time_period, location, feat1, ...] or None.
+            n_steps: Number of forecast steps.
+            n_samples: Number of sampled trajectories.
+        """
+        y_xr = target_to_xarray(y_historic, self._target_variable)
+        previous_y = y_xr.isel(time=slice(-self._model.n_target_lags, None))
+        X_xr = future_features_to_xarray(X_future) if X_future is not None else None
+        return self._model.predict_multi(previous_y, n_steps, n_samples, X_xr)
+
+
 class DeterministicMultistepModel:
     """Recursive multi-step forecaster using point predictions only (no sampling).
 

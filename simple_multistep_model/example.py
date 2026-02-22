@@ -4,7 +4,7 @@ Shows how to wire together:
 1. A plain data-transform function (DataFrame -> DataFrame)
 2. An sklearn regressor
 3. A bootstrap wrapper (ResidualBootstrapModel)
-4. The MultistepModel for recursive forecasting
+4. The DataFrameMultistepModel for recursive forecasting
 5. A CLI for train/predict from CSV
 
 Run:
@@ -15,18 +15,12 @@ Run:
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import xarray as xr
 from sklearn.ensemble import GradientBoostingRegressor
 
 from simple_multistep_model.cli import create_cli_app
-from simple_multistep_model.multistep import (
-    MultistepModel,
-    target_to_xarray,
-    features_to_xarray,
-    future_features_to_xarray,
-)
+from simple_multistep_model.multistep import DataFrameMultistepModel
 from simple_multistep_model.one_step_model import ResidualBootstrapModel
 
 # ---------------------------------------------------------------------------
@@ -55,34 +49,23 @@ def transform_data(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def train(data: pd.DataFrame) -> dict:
-    """Train a multistep model from a training DataFrame.
-
-    Args:
-        data: Long-format DataFrame with [time_period, location, disease_cases, ...].
-
-    Returns:
-        Pickleable dict with trained model.
-    """
+def train(data: pd.DataFrame) -> DataFrameMultistepModel:
+    """Train a multistep model from a training DataFrame."""
     data = transform_data(data)
 
     index_cols = ["time_period", "location"]
     feature_cols = [c for c in data.columns if c not in index_cols + [TARGET_VARIABLE]]
 
-    y_df = data[index_cols + [TARGET_VARIABLE]]
-    X_df = data[index_cols + feature_cols] if feature_cols else data[index_cols]
-
-    y_xr = target_to_xarray(y_df, TARGET_VARIABLE)
-    X_xr = features_to_xarray(X_df)
+    y = data[index_cols + [TARGET_VARIABLE]]
+    X = data[index_cols + feature_cols] if feature_cols else None
 
     sklearn_model = GradientBoostingRegressor(
         n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42
     )
     one_step = ResidualBootstrapModel(sklearn_model)
-    model = MultistepModel(one_step, N_TARGET_LAGS)
-    model.fit_multi(y_xr, X_xr)
-
-    return {"model": model, "feature_cols": feature_cols}
+    model = DataFrameMultistepModel(one_step, N_TARGET_LAGS, TARGET_VARIABLE)
+    model.fit(X, y)
+    return model
 
 
 # ---------------------------------------------------------------------------
@@ -90,31 +73,19 @@ def train(data: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def predict(model_dict: dict, historic: pd.DataFrame, future: pd.DataFrame) -> pd.DataFrame:
-    """Generate predictions from trained model.
-
-    Args:
-        model_dict: Trained model dict from train().
-        historic: Historic data in long format.
-        future: Future periods in long format.
-
-    Returns:
-        DataFrame with [time_period, location, samples] columns.
-    """
-    model: MultistepModel = model_dict["model"]
-    feature_cols: list[str] = model_dict["feature_cols"]
-
+def predict(model: DataFrameMultistepModel, historic: pd.DataFrame, future: pd.DataFrame) -> pd.DataFrame:
+    """Generate predictions from trained model."""
     historic = transform_data(historic)
     future = transform_data(future)
 
     index_cols = ["time_period", "location"]
-    y_xr = target_to_xarray(historic[index_cols + [TARGET_VARIABLE]], TARGET_VARIABLE)
-    previous_y = y_xr.isel(time=slice(-model.n_target_lags, None))
+    feature_cols = [c for c in future.columns if c not in index_cols + [TARGET_VARIABLE]]
 
-    X_future_xr = future_features_to_xarray(future[index_cols + feature_cols]) if feature_cols else None
+    y_historic = historic[index_cols + [TARGET_VARIABLE]]
+    X_future = future[index_cols + feature_cols] if feature_cols else None
 
     n_steps = future.groupby("location").size().iloc[0]
-    predictions = model.predict_multi(previous_y, n_steps, N_SAMPLES, X_future_xr)
+    predictions = model.predict(y_historic, X_future, n_steps, N_SAMPLES)
 
     return _xarray_predictions_to_pandas(predictions, future)
 

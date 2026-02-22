@@ -9,6 +9,7 @@ Compose these pieces to build a forecasting pipeline:
 """
 
 from simple_multistep_model.multistep import (
+    DataFrameMultistepModel,
     DeterministicMultistepModel,
     MultistepModel,
     MultistepDistribution,
@@ -24,6 +25,7 @@ from simple_multistep_model.one_step_model import (
 from simple_multistep_model.cli import create_cli_app
 
 __all__ = [
+    "DataFrameMultistepModel",
     "DeterministicMultistepModel",
     "MultistepModel",
     "MultistepDistribution",

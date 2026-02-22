@@ -146,6 +146,9 @@ class SkproDistribution:
 class SkproWrapper:
     """Wraps a skpro probabilistic regressor to conform to the OneStepModel protocol.
 
+    The only real job is reshaping skpro's MultiIndex DataFrame samples
+    into the (n_samples, n_rows) numpy array that MultistepModel expects.
+
     Usage:
         from skpro.regression.residual import ResidualDouble
         skpro_model = ResidualDouble(GradientBoostingRegressor())
@@ -164,20 +167,10 @@ class SkproWrapper:
         self._model = skpro_model
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Fit the skpro model.
-
-        Converts numpy arrays to DataFrames as required by skpro.
-        """
-        import pandas as pd
-
-        X_df = pd.DataFrame(X)
-        y_df = pd.DataFrame(y, columns=["target"])
-        self._model.fit(X_df, y_df)
+        """Fit the skpro model."""
+        self._model.fit(X, y)
 
     def predict_proba(self, X: np.ndarray) -> SkproDistribution:
         """Return a SkproDistribution wrapping the skpro prediction."""
-        import pandas as pd
-
-        X_df = pd.DataFrame(X)
-        skpro_dist = self._model.predict_proba(X_df)
+        skpro_dist = self._model.predict_proba(X)
         return SkproDistribution(skpro_dist)
