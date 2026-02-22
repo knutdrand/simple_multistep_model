@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simple_multistep_model"
+version = "0.1.0"
+description = "Pedagogical multistep recursive forecasting model"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "xarray",
+    "scikit-learn",
+    "skpro",
+    "cyclopts",
+]
