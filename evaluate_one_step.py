@@ -15,12 +15,12 @@ df = pd.read_csv("training_data.csv")
 df = df.sort_values(["location", "time_period"]).copy()
 disease_cases = df["disease_cases"].copy()
 
-df = lag_all_features(df[X_COLUMNS])
-print(df.columns)
-df = one_hot_encode_locations(df)
-print(df.columns)
-df = add_lagged_targets(df, disease_cases)
-print(df.columns)
+#df = lag_all_features(df[X_COLUMNS])
+#print(df.columns)
+# df = one_hot_encode_locations(df)
+#print(df.columns)
+# df = add_lagged_targets(df, disease_cases)
+# print(df.columns)
 
 # Re-attach target so NaN dropping stays in sync
 df["disease_cases"] = disease_cases.values
