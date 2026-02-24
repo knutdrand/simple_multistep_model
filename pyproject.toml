@@ -14,4 +14,5 @@ dependencies = [
     "scikit-learn",
     "skpro",
     "cyclopts",
+    "matplotlib>=3.10.8",
 ]

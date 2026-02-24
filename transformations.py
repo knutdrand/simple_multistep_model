@@ -24,6 +24,21 @@ def lag_all_features(df: pd.DataFrame, min_lag: int = 1, max_lag: int = 3) -> pd
     df = df.drop(columns=feature_cols)
     return df
 
+def add_lagged_targets(X: pd.DataFrame, y, min_lag: int = 1, max_lag: int = 3) -> pd.DataFrame:
+    """Add lagged target values as features, computed per location.
+
+    Requires ``time_period`` and ``location`` columns in *X* for correct
+    chronological grouping.  Returns a copy of *X* with new columns
+    ``target_lag1`` … ``target_lagN``.
+    """
+    X = X.sort_values(["location", "time_period"]).copy()
+    X["_target"] = y
+    for lag in range(min_lag, max_lag + 1):
+        X[f"target_lag{lag}"] = X.groupby("location")["_target"].shift(lag)
+    X = X.drop(columns="_target")
+    return X
+
+
 def transform_data(df: pd.DataFrame) -> pd.DataFrame:
     '''
     This is the transformation function imported from train and predict
