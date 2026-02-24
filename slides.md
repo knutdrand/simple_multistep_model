@@ -10,6 +10,29 @@ Building probabilistic recursive forecasts for disease surveillance
 
 ---
 
+# Starting Point: You Know Regression
+
+You're comfortable with sklearn, GLMs, gradient boosting — **supervised learning**.
+
+But now you need to forecast a **time series** across **many locations**.
+
+<br>
+
+### The gap
+
+| You know how to… | But time series needs… |
+|---|---|
+| Fit `X → y` on tabular data | Features built from the target's own **history** |
+| Predict once | Predict **multiple steps** into the future |
+| Get a point estimate | **Uncertainty** that grows with forecast horizon |
+| Train one model per dataset | One model that works across **18+ locations** |
+
+<br>
+
+> This talk shows how to bridge that gap — turning a standard regressor into a full multistep probabilistic forecasting system, step by step.
+
+---
+
 # The Problem
 
 We want to forecast disease cases **multiple months ahead**
@@ -100,29 +123,65 @@ No distributional assumptions needed — the data tells us about uncertainty.
 
 ---
 
-# The Lag Matrix
+# The Lagging Transformation
 
-Transform a time series into supervised learning features
+Raw data is **time-aligned** — each row has values observed at the same time:
 
-Given series `y = [10, 20, 30, 40, 50, 60]` with `n_lags = 3`:
+**Before: X, y aligned by time** (single location shown)
 
-| lag₁ (t-3) | lag₂ (t-2) | lag₃ (t-1) | target |
-|:-----------:|:-----------:|:-----------:|:------:|
-| 10 | 20 | 30 | **40** |
-| 20 | 30 | 40 | **50** |
-| 30 | 40 | 50 | **60** |
+| time | rainfall | temp | humidity | disease_cases |
+|------|:--------:|:----:|:--------:|:-------------:|
+| Jan  | 120      | 28   | 80       | 15            |
+| Feb  | 95       | 29   | 75       | 22            |
+| Mar  | 60       | 31   | 65       | 30            |
+| Apr  | 40       | 32   | 60       | 40            |
+| May  | 30       | 30   | 70       | 50            |
+
+We can't use this directly — the model would see **current** covariates, not lagged causes.
+
+---
+
+# After the Lagging Transformation
+
+Original columns are **replaced** by their lags; target lags are added as features.
+
+`lag_all_features(df, min_lag=1, max_lag=2)` + `add_lagged_targets(..., min_lag=1, max_lag=2)`:
+
+**After: X lagged, y unchanged** (original columns dropped)
+
+| time | rain_lag1 | rain_lag2 | temp_lag1 | temp_lag2 | hum_lag1 | hum_lag2 | target_lag1 | target_lag2 | **y** |
+|------|:---------:|:---------:|:---------:|:---------:|:--------:|:--------:|:-----------:|:-----------:|:-----:|
+| Mar  | 95        | 120       | 29        | 28        | 75       | 80       | 22          | 15          | **30** |
+| Apr  | 60        | 95        | 31        | 29        | 65       | 75       | 30          | 22          | **40** |
+| May  | 40        | 60        | 32        | 31        | 60       | 65       | 40          | 30          | **50** |
+
+- Original `rainfall`, `temp`, `humidity` columns are **gone** — replaced by `_lag1`, `_lag2`
+- `target_lag1`, `target_lag2` added from `disease_cases` history
+- First rows lost (need history to fill lags) — **no leakage**
+
+---
+
+# The min_lag Trick: Avoiding Future Covariates Entirely
+
+If `min_lag >= prediction_length`, all covariate lags are **already observed** at forecast time
+
+Example: forecasting **3 steps** ahead with `min_lag=3`:
+
+```
+Forecasting from time t → predicting t+1, t+2, t+3
+
+rain_lag3 at step t+1  =  rain(t-2)  ✅ observed
+rain_lag3 at step t+2  =  rain(t-1)  ✅ observed
+rain_lag3 at step t+3  =  rain(t)    ✅ observed  ← the "newest" value used
+```
+
+The furthest future step only reaches back to time *t* — which we already have.
 
 <br>
 
-```python
-def _build_lag_matrix(y, n_lags):
-    """Slide a window over the series — oldest to newest."""
-    # Returns shape (n_timepoints - n_lags, n_lags)
-```
+With `min_lag=1` we'd need `rain(t+2)` for step 3 — a **future** value we don't have.
 
-- Each row is one training example: the recent window → next value
-- For multi-location data, lags are built **per location**, then stacked
-- Exogenous features are appended alongside the lag columns
+> **Rule**: Set `min_lag >= prediction_length` and you never need future covariates. Trade-off: you lose the most recent lag information, but gain a model that works without any forecasted inputs.
 
 ---
 
@@ -237,7 +296,7 @@ Output: one row per location per step, with `sample_0 … sample_199` columns
 
 ---
 
-# A Limitation: What If We Don't Know Future Covariates?
+# A Limitation: We Don't Have Reliable Climate Forecasts
 
 Our recursive approach requires **future exogenous features** at each forecast step
 
@@ -249,11 +308,15 @@ Step 3: lags + rain(t+2) + temp(t+2) → ŷ(t+2)   ← and these!
 
 <br>
 
-This is fine when future covariates are **known** (e.g. climate forecasts, calendar features).
+**Our problem**: Reliable forecasted climate variables (rainfall, temperature, humidity) are **not available** for the Laos provinces at the lead times we need.
 
-But often we **don't** have future covariates — only **past** covariates are available.
+- Climate forecasts at sub-national level are inaccurate or unavailable
+- Using bad climate forecasts as inputs can be **worse than not using them at all**
+- But past climate clearly matters — rain *last month* drives cases *this month*
 
-> How can we still leverage covariate information for multistep forecasting?
+Two solutions:
+1. **Simple**: Set `min_lag >= prediction_length` so all covariate lags stay in the past (we already covered this!)
+2. **Deep learning**: Use an encoder–decoder architecture to compress history into a context vector
 
 ---
 
@@ -264,14 +327,16 @@ Two fundamentally different types of exogenous information
 | | Past covariates | Future covariates |
 |---|---|---|
 | **Available at** | Only up to time *t* | Known for *t+1, t+2, …* |
-| **Examples** | Lab results, observed rainfall, reported cases in neighboring regions | Calendar (month, holidays), scheduled interventions, climate forecasts |
-| **Challenge** | Can't feed into future decoder steps | Must be accurate forecasts themselves |
+| **Our data** | Observed rainfall, temperature, humidity up to now | Would need forecasted climate — **not reliably available** |
+| **Challenge** | Can't feed into future decoder steps | Inaccurate forecasts add noise, not signal |
 
 <br>
 
-**Key insight**: Past covariates contain useful context (e.g. "there was heavy rain last month") even though we can't observe them in the future.
+**Our situation**: We have rich climate history that clearly drives dengue dynamics, but we can't get reliable climate forecasts for Laos provinces.
 
-We need an architecture that can **summarize past context** and use it to **drive future predictions** without requiring covariate values at future time steps.
+**Key insight**: Past climate contains useful context (e.g. "heavy rain last month → expect case surge") even though we can't observe future climate.
+
+We need an architecture that can **summarize past climate context** and use it to **drive future predictions** without requiring climate values at future time steps.
 
 ---
 
@@ -320,14 +385,14 @@ for t in range(lookback):
 
 <br>
 
-At each time step the RNN sees **both** the target and all covariates.
+At each time step the RNN sees **both** the target and all climate covariates.
 
 The final hidden state *h* captures:
 - Recent trend and level of disease cases
-- Seasonal patterns in the covariate history
-- Cross-variable relationships (e.g. rain spike → case spike 2 months later)
+- Seasonal climate patterns (monsoon cycles, temperature trends)
+- Cross-variable relationships (e.g. rain spike → case surge 2 months later)
 
-> All the covariate information is **baked into** the context vector — we don't need covariates again.
+> All the climate information is **baked into** the context vector — we don't need future climate values.
 
 ---
 
@@ -363,8 +428,8 @@ Comparing the two multistep approaches
 
 | | Recursive lag model | Encoder–decoder RNN |
 |---|---|---|
-| **Past covariates** | Used if available as features | Consumed by encoder |
-| **Future covariates** | **Required** at each step | **Not needed** |
+| **Climate covariates** | Needed at **every future step** | Only needed in the **past** |
+| **Without climate forecasts** | Must drop covariates entirely | Still uses full climate history |
 | **How context is carried** | Explicit lag window | Learned hidden state |
 | **Uncertainty** | Bootstrap residuals | Parametric output layer or dropout sampling |
 | **Training** | Two-stage (fit regressor, then recurse) | End-to-end (encoder + decoder jointly) |
@@ -372,7 +437,7 @@ Comparing the two multistep approaches
 
 <br>
 
-> The encoder–decoder doesn't eliminate error accumulation — it just moves the recursion **inside** the neural network, where it can be optimized end-to-end.
+> For our Laos dengue case: the encoder–decoder lets us **use climate history without needing climate forecasts** — the key advantage when reliable forecasted climate data isn't available.
 
 ---
 
@@ -405,20 +470,22 @@ Alternatives for probabilistic outputs:
 
 # When to Use Which Approach
 
-Choose based on what information is available at forecast time
+Choose based on what covariate information is available at forecast time
 
 ```mermaid
 flowchart TD
-    Q{"Do you have future\ncovariate values?"}
-    Q --> |"Yes (known or forecasted)"| R["Recursive lag model\n+ future covariates"]
+    Q{"Do you have reliable\nfuture covariate forecasts?"}
+    Q --> |"Yes"| R["Recursive lag model\n+ future covariates\n(simplest)"]
     Q --> |"No"| Q2{"Do you have useful\npast covariates?"}
-    Q2 --> |"Yes"| ED["Encoder–decoder RNN\npast covariates → context → forecast"]
-    Q2 --> |"No"| S["Either approach\nusing target history only"]
+    Q2 --> |"Yes"| Q3{"Want to stay with\ntree-based models?"}
+    Q2 --> |"No covariates at all"| S["Either approach\ntarget history only"]
+    Q3 --> |"Yes"| ML["min_lag ≥ prediction_length\nSimple, no future values needed"]
+    Q3 --> |"Ready for deep learning"| ED["Encoder–decoder RNN\nCompresses full history into context"]
 ```
 
 <br>
 
-- **Recursive lag model**: Simpler, interpretable, works great with tree-based models. Use when future covariates are available.
-- **Encoder–decoder**: More complex, but handles the past-only covariate case naturally. Use when you have rich history but no future information.
-- **Hybrid**: Some frameworks (e.g. TFT, DeepAR) combine both — encoder for past covariates, decoder accepts known future covariates too.
+- **`min_lag >= prediction_length`**: Simplest fix — stays within our existing pipeline, just loses the most recent covariate lags
+- **Encoder–decoder**: More powerful — uses *all* history including recent lags, but requires a neural network
+- **Hybrid** (TFT, DeepAR): Best of both — encoder for past covariates, decoder also accepts known future covariates (e.g. month-of-year)
 
