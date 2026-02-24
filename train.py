@@ -19,7 +19,6 @@ FEATURE_COLUMNS = ["rainfall", "mean_temperature", "mean_relative_humidity"]
 
 def train(train_data_path: str, model_path: str) -> None:
     data = pd.read_csv(train_data_path)
-    data = transform_data(data)
 
     index_cols = ["time_period", "location"]
     y = data[index_cols + [TARGET_VARIABLE]]
