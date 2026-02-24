@@ -65,20 +65,6 @@ def create_cli_app(
         future = pd.read_csv(future_data)
 
         predictions = predict_fn(model, historic, future)
-
-        # Expand nested samples column to wide format if present
-        if "samples" in predictions.columns:
-            samples_list = predictions["samples"].tolist()
-            predictions = predictions.drop(columns=["samples"])
-            if samples_list:
-                import pandas as pd_inner
-                samples_df = pd_inner.DataFrame(
-                    samples_list,
-                    columns=[f"sample_{i}" for i in range(len(samples_list[0]))],
-                    index=predictions.index,
-                )
-                predictions = pd.concat([predictions, samples_df], axis=1)
-
         predictions.to_csv(output, index=False)
         print(f"Predictions saved to {output}")
 

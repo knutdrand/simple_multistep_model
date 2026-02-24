@@ -16,7 +16,6 @@ Run:
 from __future__ import annotations
 
 import pandas as pd
-import xarray as xr
 from sklearn.ensemble import GradientBoostingRegressor
 
 from simple_multistep_model.cli import create_cli_app
@@ -85,44 +84,7 @@ def predict(model: DataFrameMultistepModel, historic: pd.DataFrame, future: pd.D
     X_future = future[index_cols + feature_cols] if feature_cols else None
 
     n_steps = future.groupby("location").size().iloc[0]
-    predictions = model.predict(y_historic, X_future, n_steps, N_SAMPLES)
-
-    return _xarray_predictions_to_pandas(predictions, future)
-
-
-def _xarray_predictions_to_pandas(
-    predictions: xr.DataArray, future_df: pd.DataFrame
-) -> pd.DataFrame:
-    """Convert xarray predictions to pandas long format with samples column."""
-    future_df = future_df.copy()
-    original_time_strs = future_df["time_period"].astype(str)
-    future_df["_original_time"] = original_time_strs
-    future_df["time_period"] = pd.to_datetime(future_df["time_period"])
-
-    results_time: list[str] = []
-    results_location: list[str] = []
-    results_samples: list[list[float]] = []
-
-    locations = predictions.coords["location"].values
-    for loc in locations:
-        loc_str = str(loc)
-        loc_subset = future_df[future_df["location"] == loc_str].sort_values(by="time_period")
-        loc_original_times = loc_subset["_original_time"].values
-
-        loc_preds = predictions.sel(location=loc)
-        n_steps = loc_preds.sizes["step"]
-
-        for step_idx in range(n_steps):
-            samples = loc_preds.isel(step=step_idx).values.tolist()
-            results_time.append(str(loc_original_times[step_idx]))
-            results_location.append(loc_str)
-            results_samples.append(samples)
-
-    return pd.DataFrame({
-        "time_period": results_time,
-        "location": results_location,
-        "samples": results_samples,
-    })
+    return model.predict(y_historic, X_future, n_steps, N_SAMPLES)
 
 
 # ---------------------------------------------------------------------------

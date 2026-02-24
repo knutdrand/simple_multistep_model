@@ -166,6 +166,47 @@ def future_features_to_xarray(X_df) -> xr.DataArray | None:
     )
 
 
+def _predictions_to_dataframe(predictions: xr.DataArray, future_df=None):
+    """Convert xarray predictions (location, trajectory, step) to wide DataFrame.
+
+    Returns DataFrame with columns [time_period, location, sample_0, sample_1, ...].
+    Time periods are taken from future_df if provided, otherwise uses integer step indices.
+    """
+    import pandas as pd
+
+    locations = predictions.coords["location"].values
+
+    # Build a mapping from (location, step_idx) -> time_period string
+    if future_df is not None:
+        df = future_df.copy()
+        original_times = df["time_period"].astype(str)
+        df["_original_time"] = original_times
+        df["time_period"] = pd.to_datetime(df["time_period"])
+        time_lookup: dict[str, list[str]] = {}
+        for loc in locations:
+            loc_str = str(loc)
+            loc_subset = df[df["location"] == loc_str].sort_values("time_period")
+            time_lookup[loc_str] = loc_subset["_original_time"].values.tolist()
+    else:
+        time_lookup = None
+
+    rows = []
+    for loc in locations:
+        loc_str = str(loc)
+        loc_preds = predictions.sel(location=loc)
+        n_steps = loc_preds.sizes["step"]
+
+        for step_idx in range(n_steps):
+            samples = loc_preds.isel(step=step_idx).values
+            time_val = time_lookup[loc_str][step_idx] if time_lookup else step_idx
+            row = {"time_period": time_val, "location": loc_str}
+            for i, s in enumerate(samples):
+                row[f"sample_{i}"] = s
+            rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # MultistepDistribution
 # ---------------------------------------------------------------------------
@@ -238,6 +279,9 @@ class MultistepModel:
         Args:
             y: Target time series, shape (n_timepoints,).
             X: Exogenous features, shape (n_timepoints, n_features) or None.
+
+        Rows where any feature (exogenous or lagged target) or the target
+        contain NaN are silently dropped before fitting.
         """
         lags = _build_lag_matrix(y, self.n_target_lags)
         y_target = y[self.n_target_lags :]
@@ -248,7 +292,10 @@ class MultistepModel:
         else:
             features = lags.rename(lag="feature")
 
-        self.one_step_model.fit(features.values, y_target)
+        X_np = features.values
+        y_np = y_target
+        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
+        self.one_step_model.fit(X_np[mask], y_np[mask])
 
     def fit_multi(self, y: xr.DataArray, X: xr.DataArray | None = None) -> None:
         """Fit on multi-location data, pooling all locations into one training set.
@@ -256,6 +303,9 @@ class MultistepModel:
         Args:
             y: Target values, dims (location, time).
             X: Exogenous features, dims (location, time, feature) or None.
+
+        Rows where any feature (exogenous or lagged target) or the target
+        contain NaN are silently dropped before fitting.
         """
         lags = _build_lag_matrix_xr(y, self.n_target_lags)
         y_target = y.isel(time=slice(self.n_target_lags, None))
@@ -273,10 +323,10 @@ class MultistepModel:
         features_stacked = features.stack(sample=("location", "time"))
         y_stacked = y_target.stack(sample=("location", "time"))
 
-        self.one_step_model.fit(
-            features_stacked.transpose("sample", "feature").values,
-            y_stacked.values,
-        )
+        X_np = features_stacked.transpose("sample", "feature").values
+        y_np = y_stacked.values
+        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
+        self.one_step_model.fit(X_np[mask], y_np[mask])
 
     def predict_proba(
         self,
@@ -375,19 +425,33 @@ class DataFrameMultistepModel:
         X_xr = features_to_xarray(X) if X is not None else None
         self._model.fit_multi(y_xr, X_xr)
 
-    def predict(self, y_historic, X_future, n_steps: int, n_samples: int):
-        """Predict from DataFrames, return xarray (location, trajectory, step).
+    def predict(self, y_historic, X, n_steps: int, n_samples: int):
+        """Predict from DataFrames, return wide-format DataFrame.
 
         Args:
             y_historic: DataFrame with [time_period, location, <target_variable>].
-            X_future: DataFrame with [time_period, location, feat1, ...] or None.
+            X: DataFrame with [time_period, location, feat1, ...] or None.
+                May include historic context rows so that lag features are
+                computed correctly across the historic/future boundary.
             n_steps: Number of forecast steps.
             n_samples: Number of sampled trajectories.
+
+        Returns:
+            DataFrame with columns [time_period, location, sample_0, sample_1, ...].
         """
+        import pandas as pd
+
         y_xr = target_to_xarray(y_historic, self._target_variable)
         previous_y = y_xr.isel(time=slice(-self._model.n_target_lags, None))
-        X_xr = future_features_to_xarray(X_future) if X_future is not None else None
-        return self._model.predict_multi(previous_y, n_steps, n_samples, X_xr)
+
+        X_xr = features_to_xarray(X)
+        # Slice to keep only the last n_steps time periods (the future)
+        X_future_xr = X_xr.isel(time=slice(-n_steps, None)).rename({"time": "step"})
+        # Also slice the DataFrame for time_period strings in output
+        future_df = X.groupby("location", sort=False).tail(n_steps)
+        predictions = self._model.predict_multi(previous_y, n_steps, n_samples, X_future_xr)
+
+        return _predictions_to_dataframe(predictions, future_df)
 
 
 class DeterministicMultistepModel:
@@ -402,7 +466,10 @@ class DeterministicMultistepModel:
         self.n_target_lags = n_target_lags
 
     def fit(self, y: np.ndarray, X: np.ndarray | None = None) -> None:
-        """Build lag matrix from y, append to X, and train the one-step model."""
+        """Build lag matrix from y, append to X, and train the one-step model.
+
+        Rows with NaN in features or target are dropped.
+        """
         lags = _build_lag_matrix(y, self.n_target_lags)
         y_target = y[self.n_target_lags :]
 
@@ -412,10 +479,16 @@ class DeterministicMultistepModel:
         else:
             features = lags.rename(lag="feature")
 
-        self.one_step_model.fit(features.values, y_target)
+        X_np = features.values
+        y_np = y_target
+        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
+        self.one_step_model.fit(X_np[mask], y_np[mask])
 
     def fit_multi(self, y: xr.DataArray, X: xr.DataArray | None = None) -> None:
-        """Fit on multi-location data, pooling all locations."""
+        """Fit on multi-location data, pooling all locations.
+
+        Rows with NaN in features or target are dropped.
+        """
         lags = _build_lag_matrix_xr(y, self.n_target_lags)
         y_target = y.isel(time=slice(self.n_target_lags, None))
 
@@ -432,10 +505,10 @@ class DeterministicMultistepModel:
         features_stacked = features.stack(sample=("location", "time"))
         y_stacked = y_target.stack(sample=("location", "time"))
 
-        self.one_step_model.fit(
-            features_stacked.transpose("sample", "feature").values,
-            y_stacked.values,
-        )
+        X_np = features_stacked.transpose("sample", "feature").values
+        y_np = y_stacked.values
+        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
+        self.one_step_model.fit(X_np[mask], y_np[mask])
 
     def predict(
         self,
