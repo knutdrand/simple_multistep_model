@@ -24,9 +24,8 @@ def train(train_data_path: str, model_path: str) -> None:
     y = data[index_cols + [TARGET_VARIABLE]]
     X = data[index_cols + FEATURE_COLUMNS]
     X = transform_data(X)
-    skpro_model = ResidualDouble(RandomForestRegressor(
-        max_depth=10, min_samples_leaf=5, max_features="sqrt",
-    ))
+    regressor = RandomForestRegressor(max_depth=10, min_samples_leaf=5, max_features="sqrt", )
+    skpro_model = ResidualDouble(regressor)
     one_step = SkproWrapper(skpro_model)
     model = DataFrameMultistepModel(one_step, N_TARGET_LAGS, TARGET_VARIABLE)
     model.fit(X, y)
