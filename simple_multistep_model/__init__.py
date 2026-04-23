@@ -18,6 +18,7 @@ from simple_multistep_model.multistep import (
     future_features_to_xarray,
 )
 from simple_multistep_model.one_step_model import (
+    FixedMapieCrossConformalRegressor,
     ResidualBootstrapModel,
     ResidualDistribution,
     SkproWrapper,
@@ -29,6 +30,7 @@ __all__ = [
     "DeterministicMultistepModel",
     "MultistepModel",
     "MultistepDistribution",
+    "FixedMapieCrossConformalRegressor",
     "ResidualBootstrapModel",
     "ResidualDistribution",
     "SkproWrapper",

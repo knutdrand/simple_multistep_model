@@ -15,4 +15,5 @@ dependencies = [
     "skpro",
     "cyclopts",
     "matplotlib>=3.10.8",
+    "mapie>=1.3.0",
 ]

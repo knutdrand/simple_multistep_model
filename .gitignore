@@ -1,1 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual envs
+.venv/
+venv/
+
+# Build artifacts
+dist/
+build/
+
+# IDE / editor
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# ML / serialization artifacts
+*.pkl
+*.nc
+runs/
+mlruns/
+
+# Local data and run outputs (repo root only; training_data.csv is tracked)
+/model
+/model_configuration_for_run.yaml
+/predictions.csv
+/future_data.csv
+/historic_data.csv
+/tmp*
+/my_plot.html
+/myplot.html
+/plot.html
+/data/
+
+# Node (Slidev)
 node_modules/

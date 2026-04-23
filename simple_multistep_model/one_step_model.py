@@ -3,6 +3,7 @@
 Contains:
 - ResidualBootstrapModel: wraps any sklearn regressor, captures residuals for sampling
 - SkproWrapper: wraps a skpro probabilistic regressor
+- FixedMapieCrossConformalRegressor: bugfixed skpro subclass
 - Protocols: Distribution, OneStepModel
 """
 
@@ -11,6 +12,8 @@ from __future__ import annotations
 from typing import Protocol
 
 import numpy as np
+import pandas as pd
+from skpro.regression.conformal import MapieCrossConformalRegressor
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +120,38 @@ class ResidualBootstrapModel:
 # ---------------------------------------------------------------------------
 # SkproWrapper
 # ---------------------------------------------------------------------------
+
+
+class FixedMapieCrossConformalRegressor(MapieCrossConformalRegressor):
+    """MapieCrossConformalRegressor with fixed predict_proba.
+
+    skpro's default _predict_proba constructs Normal(mu, sigma) where mu is a
+    1-D numpy array and sigma is a 2-D DataFrame.  The shape mismatch causes
+    Normal.shape to broadcast incorrectly (e.g. (n, n) instead of (n, 1)),
+    which crashes Normal.sample().
+
+    This subclass ensures mu and sigma have consistent shapes.
+    """
+
+    def _predict_proba(self, X):
+        from skpro.distributions.normal import Normal
+
+        pred_mean = self.predict(X=X)
+        pred_var = self.predict_var(X=X)
+        pred_std = np.sqrt(pred_var)
+
+        if hasattr(X, "index"):
+            index = X.index
+        else:
+            index = pd.RangeIndex(start=0, stop=len(X), step=1)
+        columns = self._get_columns(method="predict")
+
+        # Coerce mu to a DataFrame matching sigma's shape to prevent
+        # numpy broadcasting from inflating Normal.shape.
+        if not isinstance(pred_mean, pd.DataFrame):
+            pred_mean = pd.DataFrame(pred_mean, index=index, columns=columns)
+
+        return Normal(mu=pred_mean, sigma=pred_std, index=index, columns=columns)
 
 
 class SkproDistribution:

@@ -451,7 +451,10 @@ class DataFrameMultistepModel:
         future_df = X.groupby("location", sort=False).tail(n_steps)
         predictions = self._model.predict_multi(previous_y, n_steps, n_samples, X_future_xr)
 
-        return _predictions_to_dataframe(predictions, future_df)
+        result = _predictions_to_dataframe(predictions, future_df)
+        sample_cols = [c for c in result.columns if c.startswith("sample_")]
+        result[sample_cols] = np.expm1(result[sample_cols])
+        return result
 
 
 class DeterministicMultistepModel:
