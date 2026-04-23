@@ -1,4 +1,14 @@
+import numpy as np
 import pandas as pd
+
+
+def add_seasonal_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Add sin/cos encoding of month-of-year from the time_period column."""
+    month = pd.to_datetime(df["time_period"]).dt.month
+    df = df.copy()
+    df["month_sin"] = np.sin(2 * np.pi * month / 12)
+    df["month_cos"] = np.cos(2 * np.pi * month / 12)
+    return df
 
 
 def one_hot_encode_locations(df: pd.DataFrame) -> pd.DataFrame:
@@ -29,6 +39,7 @@ def transform_data(df: pd.DataFrame) -> pd.DataFrame:
     This is the transformation function imported from train and predict
     '''
     df = lag_all_features(df)
+    df = add_seasonal_features(df)
     df = one_hot_encode_locations(df)
     return df
 

@@ -502,7 +502,10 @@ class DataFrameMultistepModel:
             future_times=future_times,
         )
 
-        return _predictions_to_dataframe(predictions, future_df)
+        result = _predictions_to_dataframe(predictions, future_df)
+        sample_cols = [c for c in result.columns if c.startswith("sample_")]
+        result[sample_cols] = np.expm1(result[sample_cols])
+        return result
 
 
 class DeterministicMultistepModel:

@@ -63,6 +63,8 @@ class RunConfig(BaseModel):
     use_residual_bucketing: bool = False
     min_bucket_size: int = 5
 
+    tune_regressor: bool = False
+
     rf: RandomForestConfig = Field(default_factory=RandomForestConfig)
 
 

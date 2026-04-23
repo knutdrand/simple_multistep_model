@@ -1,22 +1,31 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.egg-info/
+.pytest_cache/
 build/
 dist/
 wheels/
-*.egg-info
 
 # Virtual environments
-.venv
+.venv/
+venv/
 
+# IDE / editor
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Run outputs
 output/*
 constants/*
 runs/
+mlruns/
+/data/
 
-# IDE
-.idea/
-
-# Node tooling (not part of the project)
+# Node (Slidev)
 node_modules/
 package.json
 package-lock.json

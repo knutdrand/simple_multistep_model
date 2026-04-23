@@ -26,6 +26,7 @@ from simple_multistep_model.multistep import (
 from simple_multistep_model.one_step_model import (
     BucketedResidualBootstrapModel,
     BucketedResidualDistribution,
+    FixedMapieCrossConformalRegressor,
     ResidualBootstrapModel,
     ResidualDistribution,
     SkproWrapper,
@@ -40,6 +41,7 @@ __all__ = [
     "MultistepDistribution",
     "BucketedResidualBootstrapModel",
     "BucketedResidualDistribution",
+    "FixedMapieCrossConformalRegressor",
     "ResidualBootstrapModel",
     "ResidualDistribution",
     "SkproWrapper",
