@@ -8,6 +8,7 @@ Compose these pieces to build a forecasting pipeline:
 5. A CLI via create_cli_app
 """
 
+from simple_multistep_model.config import USE_RESIDUAL_BUCKETING
 from simple_multistep_model.multistep import (
     DataFrameMultistepModel,
     DeterministicMultistepModel,
@@ -18,6 +19,8 @@ from simple_multistep_model.multistep import (
     future_features_to_xarray,
 )
 from simple_multistep_model.one_step_model import (
+    BucketedResidualBootstrapModel,
+    BucketedResidualDistribution,
     ResidualBootstrapModel,
     ResidualDistribution,
     SkproWrapper,
@@ -29,9 +32,12 @@ __all__ = [
     "DeterministicMultistepModel",
     "MultistepModel",
     "MultistepDistribution",
+    "BucketedResidualBootstrapModel",
+    "BucketedResidualDistribution",
     "ResidualBootstrapModel",
     "ResidualDistribution",
     "SkproWrapper",
+    "USE_RESIDUAL_BUCKETING",
     "create_cli_app",
     "target_to_xarray",
     "features_to_xarray",

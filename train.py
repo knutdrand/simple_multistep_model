@@ -7,7 +7,12 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from skpro.regression.residual import ResidualDouble
 from transformations import transform_data
-from simple_multistep_model import DataFrameMultistepModel, SkproWrapper
+from simple_multistep_model import (
+    BucketedResidualBootstrapModel,
+    DataFrameMultistepModel,
+    SkproWrapper,
+    USE_RESIDUAL_BUCKETING,
+)
 
 N_TARGET_LAGS = 6
 N_SAMPLES = 100
@@ -25,8 +30,11 @@ def train(train_data_path: str, model_path: str) -> None:
     X = data[index_cols + FEATURE_COLUMNS]
     X = transform_data(X)
     regressor = RandomForestRegressor(max_depth=10, min_samples_leaf=5, max_features="sqrt", )
-    skpro_model = ResidualDouble(regressor)
-    one_step = SkproWrapper(skpro_model)
+    if USE_RESIDUAL_BUCKETING:
+        one_step = BucketedResidualBootstrapModel(regressor, min_bucket_size=5)
+    else:
+        skpro_model = ResidualDouble(regressor)
+        one_step = SkproWrapper(skpro_model)
     model = DataFrameMultistepModel(one_step, N_TARGET_LAGS, TARGET_VARIABLE)
     model.fit(X, y)
 
