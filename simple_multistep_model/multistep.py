@@ -2,8 +2,10 @@
 
 Contains:
 - MultistepModel: probabilistic recursive forecaster (uses OneStepModel protocol)
+- BucketedMultistepModel: variant that threads (location, period) context through
+  to BucketedResidualBootstrapModel. Activated via USE_RESIDUAL_BUCKETING.
 - DeterministicMultistepModel: point-prediction recursive forecaster
-- MultistepDistribution: lazy distribution for recursive trajectory sampling
+- MultistepDistribution / BucketedMultistepDistribution: lazy distributions
 - Lag matrix builders and xarray conversion helpers
 """
 
@@ -13,6 +15,13 @@ from typing import Protocol
 
 import numpy as np
 import xarray as xr
+
+from simple_multistep_model.config import USE_RESIDUAL_BUCKETING
+
+
+# ---------------------------------------------------------------------------
+# Period-token helpers (used only by the bucketed path)
+# ---------------------------------------------------------------------------
 
 
 def _infer_time_granularity(times: list) -> str:
@@ -39,10 +48,7 @@ def _period_token_from_datetime(time_value, granularity: str) -> str:
 
 def _period_token_from_string(time_period: str) -> str:
     """Extract MM or Wnn token from YYYY-MM / YYYY-Wnn strings."""
-    value = str(time_period).strip()
-    if "-W" in value:
-        return value.split("-", 1)[1]
-    return value.split("-", 1)[1]
+    return str(time_period).strip().split("-", 1)[1]
 
 
 # ---------------------------------------------------------------------------
@@ -53,11 +59,7 @@ def _period_token_from_string(time_period: str) -> str:
 class Distribution(Protocol):
     """Protocol for a probability distribution that supports sampling."""
 
-    def sample(
-        self,
-        n_samples: int,
-        context_by_row: list[tuple[str, str]] | None = None,
-    ) -> np.ndarray:
+    def sample(self, n_samples: int) -> np.ndarray:
         """Returns shape (n_samples, n_rows)."""
         ...
 
@@ -242,7 +244,7 @@ def _predictions_to_dataframe(predictions: xr.DataArray, future_df=None):
 
 
 # ---------------------------------------------------------------------------
-# MultistepDistribution
+# MultistepDistribution  (main path, untouched)
 # ---------------------------------------------------------------------------
 
 
@@ -256,16 +258,12 @@ class MultistepDistribution:
         n_steps: int,
         n_target_lags: int,
         X: np.ndarray | None,
-        location: str | None = None,
-        step_period_tokens: list[str] | None = None,
     ):
         self._model = model
         self._previous_y = previous_y
         self._n_steps = n_steps
         self._n_target_lags = n_target_lags
         self._X = X
-        self._location = location
-        self._step_period_tokens = step_period_tokens or []
 
     def sample(self, n: int) -> np.ndarray:
         """Generate n recursive trajectories.
@@ -289,16 +287,7 @@ class MultistepDistribution:
                 features = lag_window.rename(lag="feature")
 
             dist = self._model.predict_proba(features.values)
-            context = None
-            if self._location is not None and step < len(self._step_period_tokens):
-                context = [(self._location, self._step_period_tokens[step])] * n
-
-            try:
-                sampled = dist.sample(1, context_by_row=context)
-            except TypeError:
-                sampled = dist.sample(1)
-
-            step_samples = xr.DataArray(sampled[0], dims=["trajectory"])
+            step_samples = xr.DataArray(dist.sample(1)[0], dims=["trajectory"])
             step_results.append(step_samples)
 
             lag_window = lag_window.roll(lag=-1)
@@ -309,7 +298,7 @@ class MultistepDistribution:
 
 
 # ---------------------------------------------------------------------------
-# MultistepModel (probabilistic)
+# MultistepModel  (main path, untouched)
 # ---------------------------------------------------------------------------
 
 
@@ -370,30 +359,16 @@ class MultistepModel:
         features_stacked = features.stack(sample=("location", "time"))
         y_stacked = y_target.stack(sample=("location", "time"))
 
-        sample_index = y_stacked.coords["sample"].to_index()
-        time_granularity = _infer_time_granularity(list(y_target.coords["time"].values))
-        residual_context = [
-            (str(loc), _period_token_from_datetime(time_val, time_granularity))
-            for loc, time_val in sample_index
-        ]
-
         X_np = features_stacked.transpose("sample", "feature").values
         y_np = y_stacked.values
         mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
-        masked_context = [ctx for ctx, keep in zip(residual_context, mask, strict=True) if keep]
-
-        try:
-            self.one_step_model.fit(X_np[mask], y_np[mask], residual_context=masked_context)
-        except TypeError:
-            self.one_step_model.fit(X_np[mask], y_np[mask])
+        self.one_step_model.fit(X_np[mask], y_np[mask])
 
     def predict_proba(
         self,
         previous_y: np.ndarray,
         n_steps: int,
         X: np.ndarray | None = None,
-        location: str | None = None,
-        step_period_tokens: list[str] | None = None,
     ) -> MultistepDistribution:
         """Return a lazy MultistepDistribution for recursive sampling.
 
@@ -408,8 +383,6 @@ class MultistepModel:
             n_steps=n_steps,
             n_target_lags=self.n_target_lags,
             X=X,
-            location=location,
-            step_period_tokens=step_period_tokens,
         )
 
     def predict_multi(
@@ -418,7 +391,6 @@ class MultistepModel:
         n_steps: int,
         n_samples: int,
         X: xr.DataArray | None = None,
-        step_period_tokens: dict[str, list[str]] | None = None,
     ) -> xr.DataArray:
         """Generate multi-step forecasts for multiple locations.
 
@@ -436,13 +408,143 @@ class MultistepModel:
         for loc in locations:
             prev = previous_y.sel(location=loc).values
             X_loc = X.sel(location=loc).values if X is not None else None
+            dist = self.predict_proba(prev, n_steps, X_loc)
+            samples = dist.sample(n_samples)
+            results.append(samples)
+
+        return xr.DataArray(
+            np.stack(results),
+            dims=["location", "trajectory", "step"],
+            coords={"location": locations},
+        )
+
+
+# ---------------------------------------------------------------------------
+# BucketedMultistepDistribution + BucketedMultistepModel  (new path)
+# ---------------------------------------------------------------------------
+
+
+class BucketedMultistepDistribution:
+    """Lazy distribution that threads (location, period_token) context per step."""
+
+    def __init__(
+        self,
+        model,
+        previous_y: np.ndarray,
+        n_steps: int,
+        n_target_lags: int,
+        X: np.ndarray | None,
+        location: str,
+        step_period_tokens: list[str],
+    ):
+        self._model = model
+        self._previous_y = previous_y
+        self._n_steps = n_steps
+        self._n_target_lags = n_target_lags
+        self._X = X
+        self._location = location
+        self._step_period_tokens = step_period_tokens
+
+    def sample(self, n: int) -> np.ndarray:
+        lag_window = xr.DataArray(
+            np.tile(self._previous_y, (n, 1)),
+            dims=["trajectory", "lag"],
+        )
+
+        step_results: list[xr.DataArray] = []
+        for step in range(self._n_steps):
+            if self._X is not None:
+                exog = xr.DataArray(
+                    np.tile(self._X[step], (n, 1)),
+                    dims=["trajectory", "feature"],
+                )
+                features = xr.concat([exog, lag_window.rename(lag="feature")], dim="feature")
+            else:
+                features = lag_window.rename(lag="feature")
+
+            dist = self._model.predict_proba(features.values)
+            context = None
+            if step < len(self._step_period_tokens):
+                context = [(self._location, self._step_period_tokens[step])] * n
+            sampled = dist.sample(1, context_by_row=context)
+            step_samples = xr.DataArray(sampled[0], dims=["trajectory"])
+            step_results.append(step_samples)
+
+            lag_window = lag_window.roll(lag=-1)
+            lag_window[{"lag": -1}] = step_samples
+
+        trajectories = xr.concat(step_results, dim="step")
+        return trajectories.transpose("trajectory", "step").values
+
+
+class BucketedMultistepModel:
+    """Variant of MultistepModel that builds and threads (location, period) context.
+
+    The wrapped one_step_model is expected to be a BucketedResidualBootstrapModel
+    (i.e. its .fit accepts residual_context= and its predict_proba returns a
+    distribution whose .sample accepts context_by_row=).
+    """
+
+    def __init__(self, one_step_model, n_target_lags: int):
+        self.one_step_model = one_step_model
+        self.n_target_lags = n_target_lags
+
+    def fit_multi(self, y: xr.DataArray, X: xr.DataArray | None = None) -> None:
+        """Fit on multi-location data, building per-(location, period) residual buckets."""
+        lags = _build_lag_matrix_xr(y, self.n_target_lags)
+        y_target = y.isel(time=slice(self.n_target_lags, None))
+
+        lags_feat = lags.rename(lag="feature")
+        if X is not None:
+            X_trimmed = X.isel(time=slice(self.n_target_lags, None))
+            features = xr.concat(
+                [X_trimmed.transpose("feature", "location", "time"), lags_feat],
+                dim="feature",
+            )
+        else:
+            features = lags_feat
+
+        features_stacked = features.stack(sample=("location", "time"))
+        y_stacked = y_target.stack(sample=("location", "time"))
+
+        sample_index = y_stacked.coords["sample"].to_index()
+        time_granularity = _infer_time_granularity(list(y_target.coords["time"].values))
+        residual_context = [
+            (str(loc), _period_token_from_datetime(time_val, time_granularity))
+            for loc, time_val in sample_index
+        ]
+
+        X_np = features_stacked.transpose("sample", "feature").values
+        y_np = y_stacked.values
+        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
+        masked_context = [ctx for ctx, keep in zip(residual_context, mask, strict=True) if keep]
+
+        self.one_step_model.fit(X_np[mask], y_np[mask], residual_context=masked_context)
+
+    def predict_multi(
+        self,
+        previous_y: xr.DataArray,
+        n_steps: int,
+        n_samples: int,
+        X: xr.DataArray | None = None,
+        step_period_tokens: dict[str, list[str]] | None = None,
+    ) -> xr.DataArray:
+        """Generate multi-step forecasts for multiple locations, with bucketed context."""
+        locations = previous_y.coords["location"].values
+        tokens = step_period_tokens or {}
+        results = []
+        for loc in locations:
+            prev = previous_y.sel(location=loc).values
+            X_loc = X.sel(location=loc).values if X is not None else None
             loc_str = str(loc)
-            dist = self.predict_proba(
-                prev,
-                n_steps,
-                X_loc,
+            dist = BucketedMultistepDistribution(
+                model=self.one_step_model,
+                previous_y=prev[-self.n_target_lags :],
+                n_steps=n_steps,
+                n_target_lags=self.n_target_lags,
+                X=X_loc,
                 location=loc_str,
-                step_period_tokens=(step_period_tokens or {}).get(loc_str, []),
+                step_period_tokens=tokens.get(loc_str, []),
             )
             samples = dist.sample(n_samples)
             results.append(samples)
@@ -455,12 +557,7 @@ class MultistepModel:
 
 
 # ---------------------------------------------------------------------------
-# DeterministicMultistepModel (point predictions only)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# DataFrameMultistepModel (thin pandas wrapper)
+# DataFrameMultistepModel (thin pandas wrapper, branches on flag)
 # ---------------------------------------------------------------------------
 
 
@@ -470,6 +567,9 @@ class DataFrameMultistepModel:
     Handles DataFrame <-> xarray conversion so the user works
     entirely in pandas. No target transforms — do those in your
     data-transform function.
+
+    When ``USE_RESIDUAL_BUCKETING`` is True, routes through
+    ``BucketedMultistepModel`` instead.
     """
 
     def __init__(
@@ -478,7 +578,10 @@ class DataFrameMultistepModel:
         n_target_lags: int,
         target_variable: str = "disease_cases",
     ) -> None:
-        self._model = MultistepModel(one_step_model, n_target_lags)
+        if USE_RESIDUAL_BUCKETING:
+            self._model = BucketedMultistepModel(one_step_model, n_target_lags)
+        else:
+            self._model = MultistepModel(one_step_model, n_target_lags)
         self._target_variable = target_variable
 
     @property
@@ -520,17 +623,26 @@ class DataFrameMultistepModel:
         X_future_xr = X_xr.isel(time=slice(-n_steps, None)).rename({"time": "step"})
         # Also slice the DataFrame for time_period strings in output
         future_df = X.groupby("location", sort=False).tail(n_steps)
-        future_tokens = {
-            str(loc): [_period_token_from_string(tp) for tp in group["time_period"].astype(str).tolist()]
-            for loc, group in future_df.groupby("location", sort=False)
-        }
-        predictions = self._model.predict_multi(
-            previous_y,
-            n_steps,
-            n_samples,
-            X_future_xr,
-            step_period_tokens=future_tokens,
-        )
+
+        if USE_RESIDUAL_BUCKETING:
+            future_tokens = {
+                str(loc): [
+                    _period_token_from_string(tp)
+                    for tp in group["time_period"].astype(str).tolist()
+                ]
+                for loc, group in future_df.groupby("location", sort=False)
+            }
+            predictions = self._model.predict_multi(
+                previous_y,
+                n_steps,
+                n_samples,
+                X_future_xr,
+                step_period_tokens=future_tokens,
+            )
+        else:
+            predictions = self._model.predict_multi(
+                previous_y, n_steps, n_samples, X_future_xr
+            )
 
         return _predictions_to_dataframe(predictions, future_df)
 
