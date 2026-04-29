@@ -5,7 +5,7 @@ import pickle
 
 import pandas as pd
 
-from simple_multistep_model import DataFrameMultistepModel, load_run_config
+from simple_multistep_model import DataFrameMultistepModel, RunConfig, load_run_config
 from transformations import transform_data
 
 INDEX_COLS = ["time_period", "location"]
@@ -18,7 +18,7 @@ def predict(
     out_file_path: str,
     config_path: str | None = None,
 ) -> None:
-    cfg = load_run_config(config_path)
+    cfg = load_run_config(config_path) if config_path else RunConfig()
 
     with open(model_path, "rb") as f:
         model: DataFrameMultistepModel = pickle.load(f)

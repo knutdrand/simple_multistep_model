@@ -23,24 +23,11 @@ TEST_DATA = REPO_ROOT / "test-data"
 PERIOD = "2012-04-01"
 
 
-def test_default_config_when_path_is_none():
-    cfg = load_run_config(None)
-    assert cfg == RunConfig()
-
-
-def test_empty_yaml_treated_as_defaults(tmp_path: Path):
-    """An empty / `{}` YAML (chap-core's placeholder) yields default config."""
+def test_empty_mapping_yields_defaults(tmp_path: Path):
+    """An empty `{}` mapping is a valid RunConfig (all fields have defaults)."""
     empty = tmp_path / "empty.yaml"
     empty.write_text("{}\n")
     assert load_run_config(empty) == RunConfig()
-
-    truly_empty = tmp_path / "really_empty.yaml"
-    truly_empty.write_text("")
-    assert load_run_config(truly_empty) == RunConfig()
-
-
-def test_missing_path_falls_back_to_defaults(tmp_path: Path):
-    assert load_run_config(tmp_path / "does_not_exist.yaml") == RunConfig()
 
 
 def test_yaml_overrides_apply(tmp_path: Path):
@@ -74,13 +61,6 @@ def test_unknown_field_rejected(tmp_path: Path):
     yaml_path = tmp_path / "bad.yaml"
     yaml_path.write_text(yaml.safe_dump({"not_a_real_field": 1}))
     with pytest.raises(Exception):
-        load_run_config(yaml_path)
-
-
-def test_non_mapping_yaml_rejected(tmp_path: Path):
-    yaml_path = tmp_path / "list.yaml"
-    yaml_path.write_text("- 1\n- 2\n")
-    with pytest.raises(ValueError):
         load_run_config(yaml_path)
 
 

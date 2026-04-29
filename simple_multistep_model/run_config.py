@@ -23,7 +23,6 @@ Example YAML::
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -67,27 +66,11 @@ class RunConfig(BaseModel):
     rf: RandomForestConfig = Field(default_factory=RandomForestConfig)
 
 
-def load_run_config(path: str | Path | None) -> RunConfig:
-    """Load a RunConfig from YAML. None or a missing/empty file yields defaults.
+def load_run_config(path: str | Path) -> RunConfig:
+    """Load and validate a RunConfig from a YAML file.
 
-    Empty YAML (e.g. the chap-core ``model_configuration_for_run.yaml: {}``
-    placeholder) is treated as "no overrides".
+    The file must exist and contain a YAML mapping with valid RunConfig
+    fields. An empty `{}` mapping is fine and yields all defaults.
     """
-    if path is None:
-        return RunConfig()
-
-    p = Path(path)
-    if not p.exists():
-        return RunConfig()
-
-    with p.open("r") as f:
-        data: Any = yaml.safe_load(f)
-
-    if data is None:
-        return RunConfig()
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"Run config at {p} must be a YAML mapping, got {type(data).__name__}"
-        )
-
-    return RunConfig.model_validate(data)
+    with Path(path).open("r") as f:
+        return RunConfig.model_validate(yaml.safe_load(f))

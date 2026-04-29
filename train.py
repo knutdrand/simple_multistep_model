@@ -10,6 +10,7 @@ from transformations import transform_data
 from simple_multistep_model import (
     BucketedResidualBootstrapModel,
     DataFrameMultistepModel,
+    RunConfig,
     SkproWrapper,
     load_run_config,
 )
@@ -18,7 +19,7 @@ INDEX_COLS = ["time_period", "location"]
 
 
 def train(train_data_path: str, model_path: str, config_path: str | None = None) -> None:
-    cfg = load_run_config(config_path)
+    cfg = load_run_config(config_path) if config_path else RunConfig()
 
     data = pd.read_csv(train_data_path)
     y = data[INDEX_COLS + [cfg.target_variable]]
