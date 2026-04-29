@@ -2,8 +2,9 @@
 
 Contains:
 - ResidualBootstrapModel: wraps any sklearn regressor, captures residuals for sampling
-- BucketedResidualBootstrapModel: like above, but with per-location / per-period
-  residual pools. Gated behind USE_RESIDUAL_BUCKETING — see config.py.
+- BucketedResidualBootstrapModel: like above, but with residuals pooled by an
+  opaque bucket id (see ``bucket_calculator.BucketCalculator``). Gated behind
+  USE_RESIDUAL_BUCKETING — see config.py.
 - SkproWrapper: wraps a skpro probabilistic regressor
 - Protocols: Distribution, OneStepModel
 """
@@ -123,140 +124,105 @@ class ResidualBootstrapModel:
 
 
 class BucketedResidualDistribution:
-    """Point predictions plus resampled residuals, bucketed by (location, period).
-
-    Falls back to per-location residuals, then to the global pool, when a
-    bucket is smaller than ``min_bucket_size``.
-    """
+    """Point predictions plus per-row residual pools (already bucket-resolved)."""
 
     def __init__(
         self,
         predictions: np.ndarray,
-        residuals: np.ndarray,
-        residuals_by_location: dict[str, np.ndarray],
-        residuals_by_location_period: dict[tuple[str, str], np.ndarray],
-        min_bucket_size: int,
+        pools_by_row: list[np.ndarray],
     ) -> None:
+        if len(pools_by_row) != len(predictions):
+            raise ValueError(
+                "pools_by_row length must match predictions "
+                f"({len(pools_by_row)} != {len(predictions)})"
+            )
         self._predictions = predictions
-        self._residuals = residuals
-        self._residuals_by_location = residuals_by_location
-        self._residuals_by_location_period = residuals_by_location_period
-        self._min_bucket_size = min_bucket_size
+        self._pools_by_row = pools_by_row
 
-    def _pool_for_context(self, location: str, period_token: str) -> np.ndarray:
-        period_pool = self._residuals_by_location_period.get((location, period_token))
-        if period_pool is not None and len(period_pool) >= self._min_bucket_size:
-            return period_pool
+    def sample(self, n_samples: int) -> np.ndarray:
+        """Draw n_samples by adding resampled residuals from each row's pool.
 
-        location_pool = self._residuals_by_location.get(location)
-        if location_pool is not None and len(location_pool) > 0:
-            return location_pool
-
-        return self._residuals
-
-    def sample(
-        self,
-        n_samples: int,
-        context_by_row: list[tuple[str, str]] | None = None,
-    ) -> np.ndarray:
-        """Draw samples by adding resampled residuals to predictions.
-
-        Args:
-            n_samples: Number of samples to draw.
-            context_by_row: Optional list of (location, period_token) for each row.
-                When provided, residuals are drawn from the matching bucket.
-
-        Returns:
-            Shape (n_samples, n_rows), clamped to >= 0.
+        Returns shape (n_samples, n_rows), clamped to >= 0.
         """
         rng = np.random.default_rng()
         n_rows = len(self._predictions)
-
-        if context_by_row is None:
-            drawn = rng.choice(self._residuals, size=(n_samples, n_rows), replace=True)
-        else:
-            if len(context_by_row) != n_rows:
-                raise ValueError(
-                    "context_by_row length must match number of prediction rows "
-                    f"({len(context_by_row)} != {n_rows})"
-                )
-            drawn = np.empty((n_samples, n_rows), dtype=float)
-            for row_idx, (location, period_token) in enumerate(context_by_row):
-                pool = self._pool_for_context(str(location), str(period_token))
-                drawn[:, row_idx] = rng.choice(pool, size=n_samples, replace=True)
-
+        drawn = np.empty((n_samples, n_rows), dtype=float)
+        for row_idx, pool in enumerate(self._pools_by_row):
+            drawn[:, row_idx] = rng.choice(pool, size=n_samples, replace=True)
         samples = self._predictions[np.newaxis, :] + drawn
         return np.maximum(samples, 0.0)
 
 
 class BucketedResidualBootstrapModel:
-    """ResidualBootstrapModel variant with per-location / per-period buckets.
+    """ResidualBootstrapModel variant with residuals pooled by opaque bucket id.
+
+    Bucket assignment (and any fallback) is the caller's responsibility — see
+    ``bucket_calculator.BucketCalculator``. This class just stores residuals
+    keyed by bucket id and returns the matching pool per row at predict time.
 
     Usage:
         model = BucketedResidualBootstrapModel(GradientBoostingRegressor(...))
-        model.fit(X_train, y_train, residual_context=[(loc, period), ...])
-        dist = model.predict_proba(X_test)
-        samples = dist.sample(200, context_by_row=[(loc, period), ...])
+        model.fit(X_train, y_train, bucket_ids=[...])
+        dist = model.predict_proba(X_test, bucket_ids=[...])
+        samples = dist.sample(200)
     """
 
-    def __init__(self, regressor, min_bucket_size: int = 5) -> None:
+    def __init__(self, regressor) -> None:
         self._regressor = regressor
-        self._residuals: np.ndarray = np.array([0.0])
-        self._residuals_by_location: dict[str, np.ndarray] = {}
-        self._residuals_by_location_period: dict[tuple[str, str], np.ndarray] = {}
-        self._min_bucket_size = min_bucket_size
+        self._global_residuals: np.ndarray = np.array([0.0])
+        self._residuals_by_bucket: dict[str, np.ndarray] = {}
 
     def fit(
         self,
         X: np.ndarray,
         y: np.ndarray,
-        residual_context: list[tuple[str, str]] | None = None,
+        bucket_ids: list[str] | None = None,
     ) -> None:
-        """Fit regressor and store training residuals (globally and per bucket)."""
+        """Fit regressor; store residuals globally and grouped by bucket id."""
         self._regressor.fit(X, y)
         predictions = self._regressor.predict(X)
-        self._residuals = y - predictions
+        residuals = y - predictions
+        self._global_residuals = residuals
+        self._residuals_by_bucket = {}
 
-        self._residuals_by_location = {}
-        self._residuals_by_location_period = {}
-
-        if residual_context is None:
+        if bucket_ids is None:
             return
-
-        if len(residual_context) != len(self._residuals):
+        if len(bucket_ids) != len(residuals):
             raise ValueError(
-                "residual_context length must match fitted samples "
-                f"({len(residual_context)} != {len(self._residuals)})"
+                "bucket_ids length must match fitted samples "
+                f"({len(bucket_ids)} != {len(residuals)})"
             )
 
-        by_location: dict[str, list[float]] = defaultdict(list)
-        by_location_period: dict[tuple[str, str], list[float]] = defaultdict(list)
-        for residual, (location, period_token) in zip(
-            self._residuals, residual_context, strict=True
-        ):
-            loc = str(location)
-            token = str(period_token)
-            by_location[loc].append(float(residual))
-            by_location_period[(loc, token)].append(float(residual))
-
-        self._residuals_by_location = {
-            loc: np.asarray(values, dtype=float) for loc, values in by_location.items()
-        }
-        self._residuals_by_location_period = {
-            key: np.asarray(values, dtype=float)
-            for key, values in by_location_period.items()
+        grouped: dict[str, list[float]] = defaultdict(list)
+        for residual, bucket_id in zip(residuals, bucket_ids, strict=True):
+            grouped[str(bucket_id)].append(float(residual))
+        self._residuals_by_bucket = {
+            key: np.asarray(values, dtype=float) for key, values in grouped.items()
         }
 
-    def predict_proba(self, X: np.ndarray) -> BucketedResidualDistribution:
-        """Return a BucketedResidualDistribution over next-step values."""
+    def _pool(self, bucket_id: str) -> np.ndarray:
+        pool = self._residuals_by_bucket.get(bucket_id)
+        if pool is not None and len(pool) > 0:
+            return pool
+        return self._global_residuals
+
+    def predict_proba(
+        self,
+        X: np.ndarray,
+        bucket_ids: list[str] | None = None,
+    ) -> BucketedResidualDistribution:
+        """Return a distribution with residual pools pre-bound per row."""
         predictions = self._regressor.predict(X)
-        return BucketedResidualDistribution(
-            predictions,
-            self._residuals,
-            self._residuals_by_location,
-            self._residuals_by_location_period,
-            self._min_bucket_size,
-        )
+        if bucket_ids is None:
+            pools = [self._global_residuals] * len(predictions)
+        else:
+            if len(bucket_ids) != len(predictions):
+                raise ValueError(
+                    "bucket_ids length must match prediction rows "
+                    f"({len(bucket_ids)} != {len(predictions)})"
+                )
+            pools = [self._pool(str(b)) for b in bucket_ids]
+        return BucketedResidualDistribution(predictions, pools)
 
 
 # ---------------------------------------------------------------------------

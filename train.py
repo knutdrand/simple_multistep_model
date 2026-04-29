@@ -34,7 +34,7 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
         random_state=cfg.rf.random_state,
     )
     if cfg.use_residual_bucketing:
-        one_step = BucketedResidualBootstrapModel(regressor, min_bucket_size=cfg.min_bucket_size)
+        one_step = BucketedResidualBootstrapModel(regressor)
     else:
         skpro_model = ResidualDouble(regressor)
         one_step = SkproWrapper(skpro_model)
@@ -44,6 +44,7 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
         cfg.n_target_lags,
         cfg.target_variable,
         use_residual_bucketing=cfg.use_residual_bucketing,
+        min_bucket_size=cfg.min_bucket_size,
     )
     model.fit(X, y)
 
