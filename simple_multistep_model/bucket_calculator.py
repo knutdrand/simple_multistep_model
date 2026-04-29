@@ -1,4 +1,4 @@
-"""Maps (location, time_value) -> bucket_id for residual bootstrapping.
+"""Maps (location, time_value) -> int bucket_id for residual bootstrapping.
 
 The calculator follows a fit/transform pattern: at fit time it infers the
 period granularity, counts rows per fine-grained ``(location, period)``
@@ -6,10 +6,9 @@ key, and freezes a mapping that collapses sparse buckets to coarser ones
 (per-location, then global). At transform time it is a pure lookup —
 no granularity re-inference, no fallback logic at the call site.
 
-Bucket ids are strings:
-    "{location}|{period_token}"   fine
-    "{location}"                  per-location fallback
-    "_global_"                    global fallback
+Bucket ids are non-negative integers; the integer 0 is reserved for the
+global pool. Use ``bucket_label(bucket_id)`` to recover a human-readable
+form for diagnostics.
 """
 
 from __future__ import annotations
@@ -20,7 +19,8 @@ from collections.abc import Sequence
 import numpy as np
 import pandas as pd
 
-GLOBAL_BUCKET = "_global_"
+GLOBAL_BUCKET: int = 0
+GLOBAL_LABEL: str = "_global_"
 
 
 def _infer_granularity(times: Sequence) -> str:
@@ -50,32 +50,21 @@ def _period_token(time_value, granularity: str) -> str:
     return f"{int(ts.month):02d}"
 
 
-def _resolve(
-    location: str,
-    period_token: str,
-    fine_count: int,
-    location_count: int,
-    min_bucket_size: int,
-) -> str:
-    """Pick the coarsest bucket id whose pool clears min_bucket_size."""
-    if fine_count >= min_bucket_size:
-        return f"{location}|{period_token}"
-    if location_count >= min_bucket_size:
-        return location
-    return GLOBAL_BUCKET
-
-
 class BucketCalculator:
-    """Maps (location, time_value) -> bucket_id, fallback frozen at fit time."""
+    """Maps (location, time_value) -> int bucket id, fallback frozen at fit time."""
 
     def __init__(self, min_bucket_size: int = 5) -> None:
         self._min_bucket_size = min_bucket_size
         self._granularity: str = "month"
-        self._fine_to_id: dict[tuple[str, str], str] = {}
-        self._location_counts: Counter[str] = Counter()
+        # (location, period_token) -> int id (resolved at fit time)
+        self._fine_to_id: dict[tuple[str, str], int] = {}
+        # location -> int id (used as fallback for unseen periods at predict time)
+        self._location_to_id: dict[str, int] = {}
+        # int id -> human-readable label, for diagnostics
+        self._id_to_label: dict[int, str] = {GLOBAL_BUCKET: GLOBAL_LABEL}
 
     def fit(self, locations: Sequence, times: Sequence) -> "BucketCalculator":
-        """Build the (location, period_token) -> bucket_id map from training data."""
+        """Build the (location, period_token) -> int id map from training data."""
         if len(locations) != len(times):
             raise ValueError(
                 f"locations and times must align ({len(locations)} != {len(times)})"
@@ -88,33 +77,51 @@ class BucketCalculator:
             for loc, t in zip(locations, times, strict=True)
         ]
         fine_counts: Counter[tuple[str, str]] = Counter(fine_keys)
-        self._location_counts = Counter(loc for loc, _ in fine_keys)
+        location_counts: Counter[str] = Counter(loc for loc, _ in fine_keys)
 
-        self._fine_to_id = {
-            (loc, tok): _resolve(
-                loc, tok, fine_counts[(loc, tok)],
-                self._location_counts[loc], self._min_bucket_size,
-            )
-            for (loc, tok) in fine_counts
-        }
+        self._fine_to_id = {}
+        self._location_to_id = {}
+        self._id_to_label = {GLOBAL_BUCKET: GLOBAL_LABEL}
+        next_id = GLOBAL_BUCKET + 1
+
+        # Pre-assign per-location coarse ids for any location with enough rows.
+        for loc, count in location_counts.items():
+            if count >= self._min_bucket_size:
+                self._location_to_id[loc] = next_id
+                self._id_to_label[next_id] = loc
+                next_id += 1
+
+        for (loc, tok), count in fine_counts.items():
+            if count >= self._min_bucket_size:
+                self._fine_to_id[(loc, tok)] = next_id
+                self._id_to_label[next_id] = f"{loc}|{tok}"
+                next_id += 1
+            elif loc in self._location_to_id:
+                self._fine_to_id[(loc, tok)] = self._location_to_id[loc]
+            else:
+                self._fine_to_id[(loc, tok)] = GLOBAL_BUCKET
+
         return self
 
-    def _bucket_for(self, location: str, period_token: str) -> str:
+    def _bucket_for(self, location: str, period_token: str) -> int:
         cached = self._fine_to_id.get((location, period_token))
         if cached is not None:
             return cached
         # Unseen at fit time: fall through location -> global.
-        if self._location_counts.get(location, 0) >= self._min_bucket_size:
-            return location
-        return GLOBAL_BUCKET
+        return self._location_to_id.get(location, GLOBAL_BUCKET)
 
-    def transform(self, locations: Sequence, times: Sequence) -> list[str]:
-        """Look up the bucket id for each (location, time) row."""
-        return [
+    def transform(self, locations: Sequence, times: Sequence) -> np.ndarray:
+        """Look up bucket ids for each (location, time) row, returning an int array."""
+        ids = [
             self._bucket_for(str(loc), _period_token(t, self._granularity))
             for loc, t in zip(locations, times, strict=True)
         ]
+        return np.asarray(ids, dtype=np.int64)
 
-    def transform_one(self, location, time_value) -> str:
+    def transform_one(self, location, time_value) -> int:
         """Look up the bucket id for a single (location, time) pair."""
         return self._bucket_for(str(location), _period_token(time_value, self._granularity))
+
+    def bucket_label(self, bucket_id: int) -> str:
+        """Return a human-readable label for an int bucket id (for diagnostics)."""
+        return self._id_to_label.get(int(bucket_id), GLOBAL_LABEL)
