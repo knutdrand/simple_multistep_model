@@ -461,12 +461,30 @@ class DataFrameMultistepModel:
         target_variable: str = "disease_cases",
         bucket_calculator: BucketCalculator | None = None,
         log_transform_target: bool = False,
+        location_offsets: dict[str, float] | None = None,
     ) -> None:
         self._model = MultistepModel(
             one_step_model, n_target_lags, bucket_calculator=bucket_calculator
         )
         self._target_variable = target_variable
         self._log_transform_target = log_transform_target
+        self._location_offsets = (
+            {str(k): float(v) for k, v in location_offsets.items()}
+            if location_offsets is not None
+            else None
+        )
+
+    def _divide_target_by_offset(self, df):
+        """Return a copy of ``df`` with ``target_variable`` divided by per-location offset."""
+        offsets = df["location"].astype(str).map(self._location_offsets)
+        if offsets.isna().any():
+            missing = sorted(df.loc[offsets.isna(), "location"].astype(str).unique().tolist())
+            raise ValueError(
+                f"location_offsets missing entries for locations: {missing}"
+            )
+        df = df.copy()
+        df[self._target_variable] = df[self._target_variable] / offsets.to_numpy()
+        return df
 
     @property
     def n_target_lags(self) -> int:
@@ -475,12 +493,16 @@ class DataFrameMultistepModel:
     def fit(self, X, y) -> None:
         """Fit on feature and target DataFrames (multi-location).
 
-        ``y`` is in original scale; the model log1p-transforms it internally
-        when ``log_transform_target`` is set, so the caller never has to think
-        about log space.
+        ``y`` is in original scale; the model normalizes by per-location
+        offsets (when set) and log1p-transforms internally (when
+        ``log_transform_target`` is set), so the caller never has to think
+        about transformed space.
         """
+        if self._location_offsets is not None:
+            y = self._divide_target_by_offset(y)
         if self._log_transform_target:
-            y = y.copy()
+            if self._location_offsets is None:
+                y = y.copy()
             y[self._target_variable] = np.log1p(y[self._target_variable])
         y_xr = target_to_xarray(y, self._target_variable)
         X_xr = features_to_xarray(X) if X is not None else None
@@ -489,13 +511,18 @@ class DataFrameMultistepModel:
     def predict(self, y_historic, X, n_steps: int, n_samples: int):
         """Predict from DataFrames, return wide-format DataFrame.
 
-        ``y_historic`` is in original scale; the model log1p-transforms it
-        internally (when ``log_transform_target`` is set) so the lag-feature
-        seed lives in the same space the model was trained on, then expm1's
-        the output samples back to original scale before returning.
+        ``y_historic`` is in original scale; the model normalizes it by the
+        same per-location offsets used at fit time (when set) and
+        log1p-transforms it internally (when ``log_transform_target`` is set)
+        so the lag-feature seed lives in the same space the model was trained
+        on, then expm1's the output samples and re-multiplies by the offset
+        before returning so the caller sees original-scale predictions.
         """
+        if self._location_offsets is not None:
+            y_historic = self._divide_target_by_offset(y_historic)
         if self._log_transform_target:
-            y_historic = y_historic.copy()
+            if self._location_offsets is None:
+                y_historic = y_historic.copy()
             y_historic[self._target_variable] = np.log1p(y_historic[self._target_variable])
         y_xr = target_to_xarray(y_historic, self._target_variable)
         previous_y = y_xr.isel(time=slice(-self._model.n_target_lags, None))
@@ -525,6 +552,16 @@ class DataFrameMultistepModel:
         sample_cols = [c for c in result.columns if c.startswith("sample_")]
         if self._log_transform_target:
             result[sample_cols] = np.expm1(result[sample_cols])
+        if self._location_offsets is not None:
+            offsets = result["location"].astype(str).map(self._location_offsets)
+            if offsets.isna().any():
+                missing = sorted(
+                    result.loc[offsets.isna(), "location"].astype(str).unique().tolist()
+                )
+                raise ValueError(
+                    f"location_offsets missing entries for locations: {missing}"
+                )
+            result[sample_cols] = result[sample_cols].mul(offsets.to_numpy(), axis=0)
         result[sample_cols] = result[sample_cols].clip(lower=0.0)
         return result
 

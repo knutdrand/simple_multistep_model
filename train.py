@@ -82,11 +82,28 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
     X = data[INDEX_COLS + cfg.feature_columns]
     X = transform_data(X, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
 
+    location_offsets: dict[str, float] | None = None
+    if cfg.normalize_by_population:
+        if "population" not in data.columns:
+            raise ValueError(
+                "normalize_by_population=true requires a 'population' column "
+                "in the training data"
+            )
+        pop_per_loc = (
+            data.dropna(subset=["population"]).groupby("location")["population"].first()
+        )
+        location_offsets = {str(k): float(v) for k, v in pop_per_loc.items()}
+
     if cfg.tune_regressor:
         # choose_regressor must search in the same target space the model
-        # will actually fit in; the multistep model log1p's internally, so
-        # mirror that here when tuning.
+        # will actually fit in; the multistep model normalizes by per-location
+        # offset (when set) and log1p's internally, so mirror both here.
         y_for_search = y.copy()
+        if location_offsets is not None:
+            offsets = y_for_search["location"].astype(str).map(location_offsets)
+            y_for_search[cfg.target_variable] = (
+                y_for_search[cfg.target_variable] / offsets.to_numpy()
+            )
         if cfg.log_transform_target:
             y_for_search[cfg.target_variable] = np.log1p(y_for_search[cfg.target_variable])
         regressor = choose_regressor(X, y_for_search, cfg.target_variable, cfg.n_target_lags)
@@ -113,6 +130,7 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
         cfg.target_variable,
         bucket_calculator=bucket_calculator,
         log_transform_target=cfg.log_transform_target,
+        location_offsets=location_offsets,
     )
     model.fit(X, y)
 

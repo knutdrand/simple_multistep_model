@@ -116,6 +116,45 @@ def test_train_predict_end_to_end_with_yaml(tmp_path: Path, use_residual_bucketi
     # use_residual_bucketing=False does not, so don't assert non-negativity here.
 
 
+def test_normalize_by_population_round_trip(tmp_path: Path):
+    """End-to-end check that normalize_by_population trains and re-scales correctly.
+
+    The post-expm1 multiply by population is the only step that could push
+    samples meaningfully above zero on log-rate-trained predictions, so we
+    verify samples are finite, non-negative, and on a scale comparable to
+    the actual training case counts (mean cases ~1, max in the hundreds in
+    the test data) rather than the per-capita scale.
+    """
+    cfg_path = TEST_DATA / "debug_config_pop.yaml"
+    cfg = load_run_config(cfg_path)
+    assert cfg.normalize_by_population is True
+
+    model_path = tmp_path / "model.pkl"
+    train_module.train(
+        str(TEST_DATA / "training_data.csv"),
+        str(model_path),
+        str(cfg_path),
+    )
+
+    out_path = tmp_path / "predictions.csv"
+    predict_module.predict(
+        str(model_path),
+        str(TEST_DATA / f"historic_data_{PERIOD}.csv"),
+        str(TEST_DATA / f"future_data_{PERIOD}.csv"),
+        str(out_path),
+        str(cfg_path),
+    )
+
+    preds = pd.read_csv(out_path)
+    sample_cols = [c for c in preds.columns if c.startswith("sample_")]
+    samples = preds[sample_cols].to_numpy()
+    assert np.isfinite(samples).all()
+    assert (samples >= 0).all()
+    # If the post-expm1 multiply was missing, samples would still be in
+    # per-capita space (~1e-5) and never approach a single-digit case count.
+    assert samples.max() > 1.0
+
+
 def test_train_with_no_config_path_uses_defaults_for_features(tmp_path: Path):
     """Without a config, train falls back to the default feature_columns.
 
