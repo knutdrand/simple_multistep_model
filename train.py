@@ -79,13 +79,17 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
 
     data = pd.read_csv(train_data_path)
     y = data[INDEX_COLS + [cfg.target_variable]]
-    if cfg.log_transform_target:
-        y[cfg.target_variable] = np.log1p(y[cfg.target_variable])
     X = data[INDEX_COLS + cfg.feature_columns]
     X = transform_data(X, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
 
     if cfg.tune_regressor:
-        regressor = choose_regressor(X, y, cfg.target_variable, cfg.n_target_lags)
+        # choose_regressor must search in the same target space the model
+        # will actually fit in; the multistep model log1p's internally, so
+        # mirror that here when tuning.
+        y_for_search = y.copy()
+        if cfg.log_transform_target:
+            y_for_search[cfg.target_variable] = np.log1p(y_for_search[cfg.target_variable])
+        regressor = choose_regressor(X, y_for_search, cfg.target_variable, cfg.n_target_lags)
     else:
         regressor = RandomForestRegressor(
             n_estimators=cfg.rf.n_estimators,
