@@ -2,10 +2,15 @@
 
 Contains:
 - ResidualBootstrapModel: wraps any sklearn regressor, captures residuals for sampling
-- BucketedResidualBootstrapModel: like above, but with per-location / per-period
-  residual pools. Gated behind USE_RESIDUAL_BUCKETING — see config.py.
+- BucketedResidualBootstrapModel: like above, but pops a 'bucket_id' feature
+  column from X and pools residuals by it.
 - SkproWrapper: wraps a skpro probabilistic regressor
 - Protocols: Distribution, OneStepModel
+
+All one-step models accept ``X`` as an ``xr.DataArray`` with a ``feature``
+dim and a feature-name coord. Wrappers strip the feature coord (and any
+sentinel columns like ``bucket_id``) before handing values to sklearn /
+skpro.
 """
 
 from __future__ import annotations
@@ -14,6 +19,9 @@ from collections import defaultdict
 from typing import Protocol
 
 import numpy as np
+import xarray as xr
+
+BUCKET_ID_FEATURE = "bucket_id"
 
 
 # ---------------------------------------------------------------------------
@@ -25,35 +33,49 @@ class Distribution(Protocol):
     """Protocol for a probability distribution that supports sampling."""
 
     def sample(self, n_samples: int) -> np.ndarray:
-        """Draw samples.
-
-        Returns:
-            Shape (n_samples, n_rows).
-        """
+        """Draw samples. Returns shape (n_samples, n_rows)."""
         ...
 
 
 class OneStepModel(Protocol):
     """Protocol for a one-step probabilistic regression model."""
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Fit on (n_samples, n_features) features and (n_samples,) targets."""
+    def fit(self, X: xr.DataArray, y: np.ndarray) -> None:
+        """Fit on a (sample, feature) DataArray and (n_samples,) targets."""
         ...
 
-    def predict_proba(self, X: np.ndarray) -> Distribution:
-        """Return a Distribution over next-step values.
-
-        Args:
-            X: Feature matrix, shape (n_rows, n_features).
-
-        Returns:
-            Distribution where sample(n) returns shape (n, n_rows).
-        """
+    def predict_proba(self, X: xr.DataArray) -> Distribution:
+        """Return a Distribution where sample(n) returns shape (n, n_rows)."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# ResidualDistribution + ResidualBootstrapModel  (main path)
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _split_bucket_ids(X: xr.DataArray) -> tuple[xr.DataArray, np.ndarray | None]:
+    """Pop the bucket_id feature column if present.
+
+    Returns (X_without_bucket, bucket_ids) where bucket_ids is an int array
+    aligned with the sample dim, or None if the feature column wasn't there.
+    """
+    feature_names = X.coords["feature"].values
+    if BUCKET_ID_FEATURE not in feature_names:
+        return X, None
+    bucket_ids = X.sel(feature=BUCKET_ID_FEATURE).values.astype(np.int64)
+    keep = [f for f in feature_names if f != BUCKET_ID_FEATURE]
+    return X.sel(feature=keep), bucket_ids
+
+
+def _row_values(X: xr.DataArray) -> np.ndarray:
+    """Return X as a (n_rows, n_features) float numpy array, regardless of dim order."""
+    sample_dim = next(d for d in X.dims if d != "feature")
+    return X.transpose(sample_dim, "feature").values
+
+
+# ---------------------------------------------------------------------------
+# ResidualDistribution + ResidualBootstrapModel  (no bucketing)
 # ---------------------------------------------------------------------------
 
 
@@ -61,23 +83,13 @@ class ResidualDistribution:
     """Point predictions plus resampled residuals."""
 
     def __init__(self, predictions: np.ndarray, residuals: np.ndarray) -> None:
-        """Store predictions and training residuals.
-
-        Args:
-            predictions: Point predictions, shape (n_rows,).
-            residuals: Training residuals for resampling, shape (n_train,).
-        """
         self._predictions = predictions
         self._residuals = residuals
 
     def sample(self, n_samples: int) -> np.ndarray:
         """Draw samples by adding resampled residuals to predictions.
 
-        Args:
-            n_samples: Number of samples to draw.
-
-        Returns:
-            Shape (n_samples, n_rows), clamped to >= 0.
+        Returns shape (n_samples, n_rows), clamped to >= 0.
         """
         rng = np.random.default_rng()
         n_rows = len(self._predictions)
@@ -97,166 +109,98 @@ class ResidualBootstrapModel:
     """
 
     def __init__(self, regressor) -> None:
-        """Create from an sklearn regressor instance.
-
-        Args:
-            regressor: Any sklearn-compatible regressor with .fit() and .predict().
-        """
         self._regressor = regressor
         self._residuals: np.ndarray = np.array([0.0])
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
+    def fit(self, X: xr.DataArray, y: np.ndarray) -> None:
         """Fit regressor and store training residuals."""
-        self._regressor.fit(X, y)
-        predictions = self._regressor.predict(X)
-        self._residuals = y - predictions
+        values = _row_values(X)
+        self._regressor.fit(values, y)
+        self._residuals = y - self._regressor.predict(values)
 
-    def predict_proba(self, X: np.ndarray) -> ResidualDistribution:
-        """Return a ResidualDistribution over next-step values."""
-        predictions = self._regressor.predict(X)
+    def predict_proba(self, X: xr.DataArray) -> ResidualDistribution:
+        predictions = self._regressor.predict(_row_values(X))
         return ResidualDistribution(predictions, self._residuals)
 
 
 # ---------------------------------------------------------------------------
-# BucketedResidualDistribution + BucketedResidualBootstrapModel  (new path)
+# BucketedResidualDistribution + BucketedResidualBootstrapModel
 # ---------------------------------------------------------------------------
 
 
 class BucketedResidualDistribution:
-    """Point predictions plus resampled residuals, bucketed by (location, period).
-
-    Falls back to per-location residuals, then to the global pool, when a
-    bucket is smaller than ``min_bucket_size``.
-    """
+    """Point predictions plus per-row residual pools (already bucket-resolved)."""
 
     def __init__(
         self,
         predictions: np.ndarray,
-        residuals: np.ndarray,
-        residuals_by_location: dict[str, np.ndarray],
-        residuals_by_location_period: dict[tuple[str, str], np.ndarray],
-        min_bucket_size: int,
+        pools_by_row: list[np.ndarray],
     ) -> None:
+        if len(pools_by_row) != len(predictions):
+            raise ValueError(
+                "pools_by_row length must match predictions "
+                f"({len(pools_by_row)} != {len(predictions)})"
+            )
         self._predictions = predictions
-        self._residuals = residuals
-        self._residuals_by_location = residuals_by_location
-        self._residuals_by_location_period = residuals_by_location_period
-        self._min_bucket_size = min_bucket_size
+        self._pools_by_row = pools_by_row
 
-    def _pool_for_context(self, location: str, period_token: str) -> np.ndarray:
-        period_pool = self._residuals_by_location_period.get((location, period_token))
-        if period_pool is not None and len(period_pool) >= self._min_bucket_size:
-            return period_pool
-
-        location_pool = self._residuals_by_location.get(location)
-        if location_pool is not None and len(location_pool) > 0:
-            return location_pool
-
-        return self._residuals
-
-    def sample(
-        self,
-        n_samples: int,
-        context_by_row: list[tuple[str, str]] | None = None,
-    ) -> np.ndarray:
-        """Draw samples by adding resampled residuals to predictions.
-
-        Args:
-            n_samples: Number of samples to draw.
-            context_by_row: Optional list of (location, period_token) for each row.
-                When provided, residuals are drawn from the matching bucket.
-
-        Returns:
-            Shape (n_samples, n_rows), clamped to >= 0.
-        """
+    def sample(self, n_samples: int) -> np.ndarray:
         rng = np.random.default_rng()
         n_rows = len(self._predictions)
-
-        if context_by_row is None:
-            drawn = rng.choice(self._residuals, size=(n_samples, n_rows), replace=True)
-        else:
-            if len(context_by_row) != n_rows:
-                raise ValueError(
-                    "context_by_row length must match number of prediction rows "
-                    f"({len(context_by_row)} != {n_rows})"
-                )
-            drawn = np.empty((n_samples, n_rows), dtype=float)
-            for row_idx, (location, period_token) in enumerate(context_by_row):
-                pool = self._pool_for_context(str(location), str(period_token))
-                drawn[:, row_idx] = rng.choice(pool, size=n_samples, replace=True)
-
+        drawn = np.empty((n_samples, n_rows), dtype=float)
+        for row_idx, pool in enumerate(self._pools_by_row):
+            drawn[:, row_idx] = rng.choice(pool, size=n_samples, replace=True)
         samples = self._predictions[np.newaxis, :] + drawn
         return np.maximum(samples, 0.0)
 
 
 class BucketedResidualBootstrapModel:
-    """ResidualBootstrapModel variant with per-location / per-period buckets.
+    """ResidualBootstrapModel variant that pools residuals by an int bucket id.
 
-    Usage:
-        model = BucketedResidualBootstrapModel(GradientBoostingRegressor(...))
-        model.fit(X_train, y_train, residual_context=[(loc, period), ...])
-        dist = model.predict_proba(X_test)
-        samples = dist.sample(200, context_by_row=[(loc, period), ...])
+    Reads bucket ids from a sentinel ``bucket_id`` feature column on X,
+    pops that column before handing the rest to the regressor, and groups
+    residuals by id at fit time. At predict time it pre-binds each row's
+    residual pool (falling back to the global pool when a row's bucket id
+    has no fitted residuals).
     """
 
-    def __init__(self, regressor, min_bucket_size: int = 5) -> None:
+    def __init__(self, regressor) -> None:
         self._regressor = regressor
-        self._residuals: np.ndarray = np.array([0.0])
-        self._residuals_by_location: dict[str, np.ndarray] = {}
-        self._residuals_by_location_period: dict[tuple[str, str], np.ndarray] = {}
-        self._min_bucket_size = min_bucket_size
+        self._global_residuals: np.ndarray = np.array([0.0])
+        self._residuals_by_bucket: dict[int, np.ndarray] = {}
 
-    def fit(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        residual_context: list[tuple[str, str]] | None = None,
-    ) -> None:
-        """Fit regressor and store training residuals (globally and per bucket)."""
-        self._regressor.fit(X, y)
-        predictions = self._regressor.predict(X)
-        self._residuals = y - predictions
+    def fit(self, X: xr.DataArray, y: np.ndarray) -> None:
+        X_features, bucket_ids = _split_bucket_ids(X)
+        values = _row_values(X_features)
+        self._regressor.fit(values, y)
+        residuals = y - self._regressor.predict(values)
+        self._global_residuals = residuals
+        self._residuals_by_bucket = {}
 
-        self._residuals_by_location = {}
-        self._residuals_by_location_period = {}
-
-        if residual_context is None:
+        if bucket_ids is None:
             return
 
-        if len(residual_context) != len(self._residuals):
-            raise ValueError(
-                "residual_context length must match fitted samples "
-                f"({len(residual_context)} != {len(self._residuals)})"
-            )
-
-        by_location: dict[str, list[float]] = defaultdict(list)
-        by_location_period: dict[tuple[str, str], list[float]] = defaultdict(list)
-        for residual, (location, period_token) in zip(
-            self._residuals, residual_context, strict=True
-        ):
-            loc = str(location)
-            token = str(period_token)
-            by_location[loc].append(float(residual))
-            by_location_period[(loc, token)].append(float(residual))
-
-        self._residuals_by_location = {
-            loc: np.asarray(values, dtype=float) for loc, values in by_location.items()
-        }
-        self._residuals_by_location_period = {
-            key: np.asarray(values, dtype=float)
-            for key, values in by_location_period.items()
+        grouped: dict[int, list[float]] = defaultdict(list)
+        for residual, bucket_id in zip(residuals, bucket_ids, strict=True):
+            grouped[int(bucket_id)].append(float(residual))
+        self._residuals_by_bucket = {
+            key: np.asarray(values, dtype=float) for key, values in grouped.items()
         }
 
-    def predict_proba(self, X: np.ndarray) -> BucketedResidualDistribution:
-        """Return a BucketedResidualDistribution over next-step values."""
-        predictions = self._regressor.predict(X)
-        return BucketedResidualDistribution(
-            predictions,
-            self._residuals,
-            self._residuals_by_location,
-            self._residuals_by_location_period,
-            self._min_bucket_size,
-        )
+    def _pool(self, bucket_id: int) -> np.ndarray:
+        pool = self._residuals_by_bucket.get(int(bucket_id))
+        if pool is not None and len(pool) > 0:
+            return pool
+        return self._global_residuals
+
+    def predict_proba(self, X: xr.DataArray) -> BucketedResidualDistribution:
+        X_features, bucket_ids = _split_bucket_ids(X)
+        predictions = self._regressor.predict(_row_values(X_features))
+        if bucket_ids is None:
+            pools = [self._global_residuals] * len(predictions)
+        else:
+            pools = [self._pool(int(b)) for b in bucket_ids]
+        return BucketedResidualDistribution(predictions, pools)
 
 
 # ---------------------------------------------------------------------------
@@ -268,22 +212,11 @@ class SkproDistribution:
     """Wraps a skpro distribution object to conform to the Distribution protocol."""
 
     def __init__(self, skpro_dist) -> None:
-        """Store the skpro distribution.
-
-        Args:
-            skpro_dist: A skpro distribution object (from predict_proba).
-        """
         self._dist = skpro_dist
 
     def sample(self, n_samples: int) -> np.ndarray:
-        """Draw samples from the skpro distribution.
-
-        Returns:
-            Shape (n_samples, n_rows).
-        """
-        # skpro's .sample(n) returns a DataFrame with MultiIndex
+        # skpro's .sample(n) returns a DataFrame with MultiIndex.
         samples_df = self._dist.sample(n_samples)
-        # Reshape to (n_samples, n_rows)
         n_rows = len(self._dist)
         return samples_df.values.reshape(n_samples, n_rows)
 
@@ -293,29 +226,14 @@ class SkproWrapper:
 
     The only real job is reshaping skpro's MultiIndex DataFrame samples
     into the (n_samples, n_rows) numpy array that MultistepModel expects.
-
-    Usage:
-        from skpro.regression.residual import ResidualDouble
-        skpro_model = ResidualDouble(GradientBoostingRegressor())
-        wrapper = SkproWrapper(skpro_model)
-        wrapper.fit(X_train, y_train)
-        dist = wrapper.predict_proba(X_test)
-        samples = dist.sample(200)
     """
 
     def __init__(self, skpro_model) -> None:
-        """Create from a skpro probabilistic regressor instance.
-
-        Args:
-            skpro_model: Any skpro regressor with .fit() and .predict_proba().
-        """
         self._model = skpro_model
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> None:
-        """Fit the skpro model."""
-        self._model.fit(X, y)
+    def fit(self, X: xr.DataArray, y: np.ndarray) -> None:
+        self._model.fit(_row_values(X), y)
 
-    def predict_proba(self, X: np.ndarray) -> SkproDistribution:
-        """Return a SkproDistribution wrapping the skpro prediction."""
-        skpro_dist = self._model.predict_proba(X)
+    def predict_proba(self, X: xr.DataArray) -> SkproDistribution:
+        skpro_dist = self._model.predict_proba(_row_values(X))
         return SkproDistribution(skpro_dist)
