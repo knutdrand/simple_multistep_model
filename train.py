@@ -11,31 +11,39 @@ from simple_multistep_model import (
     BucketedResidualBootstrapModel,
     DataFrameMultistepModel,
     SkproWrapper,
-    USE_RESIDUAL_BUCKETING,
+    load_run_config,
 )
 
-N_TARGET_LAGS = 6
-N_SAMPLES = 100
-TARGET_VARIABLE = "disease_cases"
-FEATURE_COLUMNS = ["rainfall", "mean_temperature", "mean_relative_humidity"]
+INDEX_COLS = ["time_period", "location"]
 
 
+def train(train_data_path: str, model_path: str, config_path: str | None = None) -> None:
+    cfg = load_run_config(config_path)
 
-
-def train(train_data_path: str, model_path: str) -> None:
     data = pd.read_csv(train_data_path)
+    y = data[INDEX_COLS + [cfg.target_variable]]
+    X = data[INDEX_COLS + cfg.feature_columns]
+    X = transform_data(X, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
 
-    index_cols = ["time_period", "location"]
-    y = data[index_cols + [TARGET_VARIABLE]]
-    X = data[index_cols + FEATURE_COLUMNS]
-    X = transform_data(X)
-    regressor = RandomForestRegressor(max_depth=10, min_samples_leaf=5, max_features="sqrt", )
-    if USE_RESIDUAL_BUCKETING:
-        one_step = BucketedResidualBootstrapModel(regressor, min_bucket_size=5)
+    regressor = RandomForestRegressor(
+        n_estimators=cfg.rf.n_estimators,
+        max_depth=cfg.rf.max_depth,
+        min_samples_leaf=cfg.rf.min_samples_leaf,
+        max_features=cfg.rf.max_features,
+        random_state=cfg.rf.random_state,
+    )
+    if cfg.use_residual_bucketing:
+        one_step = BucketedResidualBootstrapModel(regressor, min_bucket_size=cfg.min_bucket_size)
     else:
         skpro_model = ResidualDouble(regressor)
         one_step = SkproWrapper(skpro_model)
-    model = DataFrameMultistepModel(one_step, N_TARGET_LAGS, TARGET_VARIABLE)
+
+    model = DataFrameMultistepModel(
+        one_step,
+        cfg.n_target_lags,
+        cfg.target_variable,
+        use_residual_bucketing=cfg.use_residual_bucketing,
+    )
     model.fit(X, y)
 
     with open(model_path, "wb") as f:
@@ -47,6 +55,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a multistep disease prediction model")
     parser.add_argument("train_data", help="Path to training data CSV file")
     parser.add_argument("model", help="Path to save the trained model")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional path to a RunConfig YAML file (defaults are used if omitted)",
+    )
     args = parser.parse_args()
 
-    train(args.train_data, args.model)
+    train(args.train_data, args.model, args.config)

@@ -9,6 +9,11 @@ Compose these pieces to build a forecasting pipeline:
 """
 
 from simple_multistep_model.config import USE_RESIDUAL_BUCKETING
+from simple_multistep_model.run_config import (
+    RandomForestConfig,
+    RunConfig,
+    load_run_config,
+)
 from simple_multistep_model.multistep import (
     DataFrameMultistepModel,
     DeterministicMultistepModel,
@@ -37,8 +42,11 @@ __all__ = [
     "ResidualBootstrapModel",
     "ResidualDistribution",
     "SkproWrapper",
+    "RandomForestConfig",
+    "RunConfig",
     "USE_RESIDUAL_BUCKETING",
     "create_cli_app",
+    "load_run_config",
     "target_to_xarray",
     "features_to_xarray",
     "future_features_to_xarray",

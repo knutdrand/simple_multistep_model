@@ -39,11 +39,11 @@ def add_lagged_targets(X: pd.DataFrame, y, min_lag: int = 1, max_lag: int = 3) -
     return X
 
 
-def transform_data(df: pd.DataFrame) -> pd.DataFrame:
+def transform_data(df: pd.DataFrame, min_lag: int = 1, max_lag: int = 3) -> pd.DataFrame:
     '''
     This is the transformation function imported from train and predict
     '''
-    df = lag_all_features(df)
+    df = lag_all_features(df, min_lag=min_lag, max_lag=max_lag)
     df = one_hot_encode_locations(df)
     return df
 
