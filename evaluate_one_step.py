@@ -1,9 +1,11 @@
+import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
 from sklearn.model_selection import GroupKFold, cross_val_predict
 from sklearn.metrics import PredictionErrorDisplay, r2_score, mean_absolute_error, root_mean_squared_error
 import matplotlib.pyplot as plt
-
+from sklearn.preprocessing import FunctionTransformer
+from skpro.regression.compose import TransformedTargetRegressor
 
 from transformations import lag_all_features, add_lagged_targets,one_hot_encode_locations
 
@@ -15,11 +17,11 @@ df = pd.read_csv("training_data.csv")
 df = df.sort_values(["location", "time_period"]).copy()
 disease_cases = df["disease_cases"].copy()
 
-#df = lag_all_features(df[X_COLUMNS])
-#print(df.columns)
+df = lag_all_features(df[X_COLUMNS])
+print(df.columns)
 # df = one_hot_encode_locations(df)
 #print(df.columns)
-# df = add_lagged_targets(df, disease_cases)
+#df = add_lagged_targets(df, disease_cases)
 # print(df.columns)
 
 # Re-attach target so NaN dropping stays in sync
@@ -36,7 +38,9 @@ groups = pd.to_datetime(df["time_period"]).dt.year.values
 
 # Cross-validated predictions
 cv = GroupKFold(n_splits=5)
-model = GradientBoostingRegressor(random_state=42)
+
+model = RandomForestRegressor()
+log_model = TransformedTargetRegressor(model, FunctionTransformer(np.log1p, np.expm1))
 y_pred = cross_val_predict(model, X, y, groups=groups, cv=cv)
 
 # Metrics summary

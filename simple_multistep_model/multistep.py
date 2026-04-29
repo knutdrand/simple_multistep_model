@@ -460,11 +460,13 @@ class DataFrameMultistepModel:
         n_target_lags: int,
         target_variable: str = "disease_cases",
         bucket_calculator: BucketCalculator | None = None,
+        log_transform_target: bool = False,
     ) -> None:
         self._model = MultistepModel(
             one_step_model, n_target_lags, bucket_calculator=bucket_calculator
         )
         self._target_variable = target_variable
+        self._log_transform_target = log_transform_target
 
     @property
     def n_target_lags(self) -> int:
@@ -502,7 +504,11 @@ class DataFrameMultistepModel:
             future_times=future_times,
         )
 
-        return _predictions_to_dataframe(predictions, future_df)
+        result = _predictions_to_dataframe(predictions, future_df)
+        if self._log_transform_target:
+            sample_cols = [c for c in result.columns if c.startswith("sample_")]
+            result[sample_cols] = np.expm1(result[sample_cols])
+        return result
 
 
 class DeterministicMultistepModel:
