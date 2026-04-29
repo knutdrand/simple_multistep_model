@@ -79,7 +79,8 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
 
     data = pd.read_csv(train_data_path)
     y = data[INDEX_COLS + [cfg.target_variable]]
-    y[cfg.target_variable] = np.log1p(y[cfg.target_variable])
+    if cfg.log_transform_target:
+        y[cfg.target_variable] = np.log1p(y[cfg.target_variable])
     X = data[INDEX_COLS + cfg.feature_columns]
     X = transform_data(X, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
 
@@ -107,6 +108,7 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
         cfg.n_target_lags,
         cfg.target_variable,
         bucket_calculator=bucket_calculator,
+        log_transform_target=cfg.log_transform_target,
     )
     model.fit(X, y)
 
