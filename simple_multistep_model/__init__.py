@@ -8,7 +8,7 @@ Compose these pieces to build a forecasting pipeline:
 5. A CLI via create_cli_app
 """
 
-from simple_multistep_model.config import USE_RESIDUAL_BUCKETING
+from simple_multistep_model.bucket_calculator import BucketCalculator
 from simple_multistep_model.run_config import (
     RandomForestConfig,
     RunConfig,
@@ -33,6 +33,7 @@ from simple_multistep_model.one_step_model import (
 from simple_multistep_model.cli import create_cli_app
 
 __all__ = [
+    "BucketCalculator",
     "DataFrameMultistepModel",
     "DeterministicMultistepModel",
     "MultistepModel",
@@ -44,7 +45,6 @@ __all__ = [
     "SkproWrapper",
     "RandomForestConfig",
     "RunConfig",
-    "USE_RESIDUAL_BUCKETING",
     "create_cli_app",
     "load_run_config",
     "target_to_xarray",

@@ -17,7 +17,6 @@ import numpy as np
 import xarray as xr
 
 from simple_multistep_model.bucket_calculator import BucketCalculator
-from simple_multistep_model.config import USE_RESIDUAL_BUCKETING
 from simple_multistep_model.one_step_model import BUCKET_ID_FEATURE
 
 
@@ -451,9 +450,8 @@ class MultistepModel:
 class DataFrameMultistepModel:
     """Thin pandas wrapper around MultistepModel.
 
-    Handles DataFrame <-> xarray conversion. When ``use_residual_bucketing``
-    is True, attaches a fitted BucketCalculator to the underlying MultistepModel
-    so the feature DataArray gets annotated with ``bucket_id``.
+    Handles DataFrame <-> xarray conversion. Pass a ``BucketCalculator`` to
+    pool residuals by (location, period); when omitted, no bucketing happens.
     """
 
     def __init__(
@@ -461,19 +459,10 @@ class DataFrameMultistepModel:
         one_step_model: OneStepModel,
         n_target_lags: int,
         target_variable: str = "disease_cases",
-        use_residual_bucketing: bool | None = None,
-        min_bucket_size: int = 5,
+        bucket_calculator: BucketCalculator | None = None,
     ) -> None:
-        self._use_residual_bucketing = (
-            USE_RESIDUAL_BUCKETING if use_residual_bucketing is None else use_residual_bucketing
-        )
-        bucket_calc = (
-            BucketCalculator(min_bucket_size=min_bucket_size)
-            if self._use_residual_bucketing
-            else None
-        )
         self._model = MultistepModel(
-            one_step_model, n_target_lags, bucket_calculator=bucket_calc
+            one_step_model, n_target_lags, bucket_calculator=bucket_calculator
         )
         self._target_variable = target_variable
 
@@ -501,7 +490,7 @@ class DataFrameMultistepModel:
                 str(loc): group["time_period"].astype(str).tolist()
                 for loc, group in future_df.groupby("location", sort=False)
             }
-            if self._use_residual_bucketing
+            if self._model.bucket_calculator is not None
             else None
         )
 

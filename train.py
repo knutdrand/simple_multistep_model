@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestRegressor
 from skpro.regression.residual import ResidualDouble
 from transformations import transform_data
 from simple_multistep_model import (
+    BucketCalculator,
     BucketedResidualBootstrapModel,
     DataFrameMultistepModel,
     RunConfig,
@@ -35,16 +36,17 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
     )
     if cfg.use_residual_bucketing:
         one_step = BucketedResidualBootstrapModel(regressor)
+        bucket_calculator = BucketCalculator(min_bucket_size=cfg.min_bucket_size)
     else:
         skpro_model = ResidualDouble(regressor)
         one_step = SkproWrapper(skpro_model)
+        bucket_calculator = None
 
     model = DataFrameMultistepModel(
         one_step,
         cfg.n_target_lags,
         cfg.target_variable,
-        use_residual_bucketing=cfg.use_residual_bucketing,
-        min_bucket_size=cfg.min_bucket_size,
+        bucket_calculator=bucket_calculator,
     )
     model.fit(X, y)
 

@@ -3,7 +3,7 @@
 Contains:
 - ResidualBootstrapModel: wraps any sklearn regressor, captures residuals for sampling
 - BucketedResidualBootstrapModel: like above, but pops a 'bucket_id' feature
-  column from X and pools residuals by it. Gated behind USE_RESIDUAL_BUCKETING.
+  column from X and pools residuals by it.
 - SkproWrapper: wraps a skpro probabilistic regressor
 - Protocols: Distribution, OneStepModel
 
