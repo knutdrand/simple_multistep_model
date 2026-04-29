@@ -473,13 +473,30 @@ class DataFrameMultistepModel:
         return self._model.n_target_lags
 
     def fit(self, X, y) -> None:
-        """Fit on feature and target DataFrames (multi-location)."""
+        """Fit on feature and target DataFrames (multi-location).
+
+        ``y`` is in original scale; the model log1p-transforms it internally
+        when ``log_transform_target`` is set, so the caller never has to think
+        about log space.
+        """
+        if self._log_transform_target:
+            y = y.copy()
+            y[self._target_variable] = np.log1p(y[self._target_variable])
         y_xr = target_to_xarray(y, self._target_variable)
         X_xr = features_to_xarray(X) if X is not None else None
         self._model.fit_multi(y_xr, X_xr)
 
     def predict(self, y_historic, X, n_steps: int, n_samples: int):
-        """Predict from DataFrames, return wide-format DataFrame."""
+        """Predict from DataFrames, return wide-format DataFrame.
+
+        ``y_historic`` is in original scale; the model log1p-transforms it
+        internally (when ``log_transform_target`` is set) so the lag-feature
+        seed lives in the same space the model was trained on, then expm1's
+        the output samples back to original scale before returning.
+        """
+        if self._log_transform_target:
+            y_historic = y_historic.copy()
+            y_historic[self._target_variable] = np.log1p(y_historic[self._target_variable])
         y_xr = target_to_xarray(y_historic, self._target_variable)
         previous_y = y_xr.isel(time=slice(-self._model.n_target_lags, None))
 
@@ -505,9 +522,10 @@ class DataFrameMultistepModel:
         )
 
         result = _predictions_to_dataframe(predictions, future_df)
+        sample_cols = [c for c in result.columns if c.startswith("sample_")]
         if self._log_transform_target:
-            sample_cols = [c for c in result.columns if c.startswith("sample_")]
             result[sample_cols] = np.expm1(result[sample_cols])
+        result[sample_cols] = result[sample_cols].clip(lower=0.0)
         return result
 
 

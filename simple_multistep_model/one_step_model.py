@@ -92,13 +92,15 @@ class ResidualDistribution:
     def sample(self, n_samples: int) -> np.ndarray:
         """Draw samples by adding resampled residuals to predictions.
 
-        Returns shape (n_samples, n_rows), clamped to >= 0.
+        Returns shape (n_samples, n_rows). Samples are returned in whatever
+        space the model was trained in (log space when the multistep model
+        log-transforms the target); the caller is responsible for any
+        original-scale non-negativity clamp.
         """
         rng = np.random.default_rng()
         n_rows = len(self._predictions)
         drawn = rng.choice(self._residuals, size=(n_samples, n_rows), replace=True)
-        samples = self._predictions[np.newaxis, :] + drawn
-        return np.maximum(samples, 0.0)
+        return self._predictions[np.newaxis, :] + drawn
 
 
 class ResidualBootstrapModel:
@@ -153,8 +155,7 @@ class BucketedResidualDistribution:
         drawn = np.empty((n_samples, n_rows), dtype=float)
         for row_idx, pool in enumerate(self._pools_by_row):
             drawn[:, row_idx] = rng.choice(pool, size=n_samples, replace=True)
-        samples = self._predictions[np.newaxis, :] + drawn
-        return np.maximum(samples, 0.0)
+        return self._predictions[np.newaxis, :] + drawn
 
 
 class BucketedResidualBootstrapModel:
