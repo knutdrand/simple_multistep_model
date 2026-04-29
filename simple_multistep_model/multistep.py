@@ -577,8 +577,12 @@ class DataFrameMultistepModel:
         one_step_model: OneStepModel,
         n_target_lags: int,
         target_variable: str = "disease_cases",
+        use_residual_bucketing: bool | None = None,
     ) -> None:
-        if USE_RESIDUAL_BUCKETING:
+        self._use_residual_bucketing = (
+            USE_RESIDUAL_BUCKETING if use_residual_bucketing is None else use_residual_bucketing
+        )
+        if self._use_residual_bucketing:
             self._model = BucketedMultistepModel(one_step_model, n_target_lags)
         else:
             self._model = MultistepModel(one_step_model, n_target_lags)
@@ -624,7 +628,7 @@ class DataFrameMultistepModel:
         # Also slice the DataFrame for time_period strings in output
         future_df = X.groupby("location", sort=False).tail(n_steps)
 
-        if USE_RESIDUAL_BUCKETING:
+        if self._use_residual_bucketing:
             future_tokens = {
                 str(loc): [
                     _period_token_from_string(tp)

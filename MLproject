@@ -7,11 +7,13 @@ entry_points:
     parameters:
       train_data: str
       model: str
-    command: "python train.py {train_data} {model}"
+      config: { type: str, default: "model_configuration_for_run.yaml" }
+    command: "python train.py {train_data} {model} --config {config}"
   predict:
     parameters:
       historic_data: str
       future_data: str
       model: str
       out_file: str
-    command: "python predict.py {model} {historic_data} {future_data} {out_file}"
+      config: { type: str, default: "model_configuration_for_run.yaml" }
+    command: "python predict.py {model} {historic_data} {future_data} {out_file} --config {config}"

@@ -15,4 +15,6 @@ dependencies = [
     "skpro",
     "cyclopts",
     "matplotlib>=3.10.8",
+    "pydantic>=2.13.3",
+    "pyyaml>=6.0.3",
 ]
