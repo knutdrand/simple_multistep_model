@@ -12,3 +12,31 @@ wheels/
 output/*
 constants/*
 runs/
+
+# IDE
+.idea/
+
+# Node tooling (not part of the project)
+node_modules/
+package.json
+package-lock.json
+
+# Generated plots / reports (slides.md is source; html/pdf are built)
+*.html
+*.pdf
+
+# Binary model and data artifacts
+*.pkl
+*.nc
+
+# Output CSVs / model files written at the repo root by ad-hoc runs.
+# Test fixtures live under test-data/ and are not affected by these patterns.
+/model
+/example.csv
+/training_data.csv
+/historic_data.csv
+/future_data.csv
+/predictions.csv
+/model_configuration_for_run.yaml
+/tmp.*
+/tmp_*
