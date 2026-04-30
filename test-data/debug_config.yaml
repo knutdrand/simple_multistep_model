@@ -4,8 +4,8 @@
 #   training/historic/future CSVs (no mean_relative_humidity).
 # - RandomForest knobs are deliberately tiny so the train/predict tests
 #   stay fast.
-# - use_residual_bucketing=true so prediction samples are clamped to >= 0
-#   (the skpro path used when False does not clamp).
+# - prob_wrapper=bucketedresidual exercises the residual-bucketing path
+#   end-to-end in the test suite.
 target_variable: disease_cases
 feature_columns:
   - rainfall
@@ -17,7 +17,7 @@ n_samples: 20
 feature_min_lag: 1
 feature_max_lag: 3
 
-use_residual_bucketing: true
+prob_wrapper: bucketedresidual
 min_bucket_size: 3
 
 rf:
