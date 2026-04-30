@@ -2,7 +2,7 @@
 
 A run config is normally loaded from a YAML file and threaded through both
 `train.py` and `predict.py` so that knobs (feature columns, lag depth,
-sample count, regressor params, residual-bucketing toggle, ...) live in
+sample count, regressor params, probabilistic-wrapper choice, ...) live in
 one place rather than scattered as module-level constants.
 
 Example YAML::
@@ -11,7 +11,7 @@ Example YAML::
     feature_columns: [rainfall, mean_temperature]
     n_target_lags: 6
     n_samples: 100
-    use_residual_bucketing: false
+    prob_wrapper: bootstrap
     rf:
       n_estimators: 100
       max_depth: 10
@@ -23,9 +23,12 @@ Example YAML::
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+ProbWrapper = Literal["bucketedresidual", "bootstrap", "cross-conformal"]
 
 
 class RandomForestConfig(BaseModel):
@@ -60,7 +63,7 @@ class RunConfig(BaseModel):
     feature_min_lag: int = 1
     feature_max_lag: int = 3
 
-    use_residual_bucketing: bool = False
+    prob_wrapper: ProbWrapper = "bootstrap"
     min_bucket_size: int = 5
 
     log_transform_target: bool = True

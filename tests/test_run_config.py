@@ -38,7 +38,7 @@ def test_yaml_overrides_apply(tmp_path: Path):
                 "feature_columns": ["rainfall"],
                 "n_target_lags": 4,
                 "n_samples": 7,
-                "use_residual_bucketing": True,
+                "prob_wrapper": "bucketedresidual",
                 "rf": {"n_estimators": 11, "max_depth": 3, "random_state": 1},
             }
         )
@@ -48,7 +48,7 @@ def test_yaml_overrides_apply(tmp_path: Path):
     assert cfg.feature_columns == ["rainfall"]
     assert cfg.n_target_lags == 4
     assert cfg.n_samples == 7
-    assert cfg.use_residual_bucketing is True
+    assert cfg.prob_wrapper == "bucketedresidual"
     assert cfg.rf.n_estimators == 11
     assert cfg.rf.max_depth == 3
     assert cfg.rf.random_state == 1
@@ -64,8 +64,10 @@ def test_unknown_field_rejected(tmp_path: Path):
         load_run_config(yaml_path)
 
 
-@pytest.mark.parametrize("use_residual_bucketing", [False, True])
-def test_train_predict_end_to_end_with_yaml(tmp_path: Path, use_residual_bucketing: bool):
+@pytest.mark.parametrize(
+    "prob_wrapper", ["bucketedresidual", "bootstrap", "cross-conformal"]
+)
+def test_train_predict_end_to_end_with_yaml(tmp_path: Path, prob_wrapper: str):
     """train.train and predict.predict run against the test fixtures with a YAML config."""
     cfg_path = tmp_path / "run_config.yaml"
     cfg_path.write_text(
@@ -74,7 +76,7 @@ def test_train_predict_end_to_end_with_yaml(tmp_path: Path, use_residual_bucketi
                 "feature_columns": ["rainfall", "mean_temperature"],
                 "n_target_lags": 6,
                 "n_samples": 25,
-                "use_residual_bucketing": use_residual_bucketing,
+                "prob_wrapper": prob_wrapper,
                 "min_bucket_size": 3,
                 "rf": {
                     "n_estimators": 20,
@@ -112,8 +114,7 @@ def test_train_predict_end_to_end_with_yaml(tmp_path: Path, use_residual_bucketi
 
     samples = preds[sample_cols].to_numpy()
     assert np.isfinite(samples).all()
-    # The bucketed path clamps to >= 0; the skpro path used for
-    # use_residual_bucketing=False does not, so don't assert non-negativity here.
+    assert (samples >= 0).all()
 
 
 def test_train_with_no_config_path_uses_defaults_for_features(tmp_path: Path):
