@@ -64,6 +64,28 @@ def test_unknown_field_rejected(tmp_path: Path):
         load_run_config(yaml_path)
 
 
+def test_chap_user_option_values_wrapper_is_unwrapped(tmp_path: Path):
+    """chap's eval/forecast pipeline writes the model config under
+    ``user_option_values:`` alongside its own housekeeping keys; load_run_config
+    must read through that wrapper rather than failing extra="forbid"."""
+    yaml_path = tmp_path / "chap_cfg.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump(
+            {
+                "additional_continuous_covariates": [],
+                "user_option_values": {
+                    "prob_wrapper": "cross-conformal",
+                    "n_samples": 42,
+                },
+            }
+        )
+    )
+
+    cfg = load_run_config(yaml_path)
+    assert cfg.prob_wrapper == "cross-conformal"
+    assert cfg.n_samples == 42
+
+
 @pytest.mark.parametrize(
     "prob_wrapper", ["bucketedresidual", "bootstrap", "cross-conformal"]
 )

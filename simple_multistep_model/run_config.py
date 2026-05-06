@@ -77,6 +77,15 @@ def load_run_config(path: str | Path) -> RunConfig:
 
     The file must exist and contain a YAML mapping with valid RunConfig
     fields. An empty `{}` mapping is fine and yields all defaults.
+
+    chap's eval/forecast pipeline writes the model config wrapped under a
+    ``user_option_values`` key (alongside its own housekeeping fields).
+    When that wrapper is present we read from it, so RunConfig itself can
+    stay strict (extra="forbid") and still catch typos in user-authored
+    YAMLs.
     """
     with Path(path).open("r") as f:
-        return RunConfig.model_validate(yaml.safe_load(f))
+        raw = yaml.safe_load(f) or {}
+    if "user_option_values" in raw:
+        raw = raw["user_option_values"] or {}
+    return RunConfig.model_validate(raw)

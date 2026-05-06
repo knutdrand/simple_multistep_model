@@ -1,0 +1,14 @@
+log_transform_target: true
+prob_wrapper: cross-conformal
+n_target_lags: 6
+n_samples: 200
+feature_columns:
+  - rainfall
+  - mean_temperature
+  - mean_relative_humidity
+rf:
+  n_estimators: 100
+  max_depth: 10
+  min_samples_leaf: 5
+  max_features: sqrt
+  random_state: 42

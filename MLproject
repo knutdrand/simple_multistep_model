@@ -1,4 +1,4 @@
-name: simple_multistep_example
+name: simple_multistep_model
 
 uv_env: pyproject.toml
 
