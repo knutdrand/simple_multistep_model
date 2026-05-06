@@ -213,22 +213,34 @@ class BucketedResidualBootstrapModel:
 
 
 class FixedMapieCrossConformalRegressor(MapieCrossConformalRegressor):
-    """MapieCrossConformalRegressor with fixed predict_proba.
+    """MapieCrossConformalRegressor with a working _predict_proba.
 
-    skpro's default _predict_proba constructs Normal(mu, sigma) where mu is a
-    1-D numpy array and sigma is a 2-D DataFrame.  The shape mismatch causes
-    Normal.shape to broadcast incorrectly (e.g. (n, n) instead of (n, 1)),
-    which crashes Normal.sample().
+    Two upstream issues this subclass works around:
 
-    This subclass ensures mu and sigma have consistent shapes.
+    1. skpro's default _predict_proba constructs Normal(mu, sigma) where mu
+       is 1-D and sigma is 2-D, which broadcasts Normal.shape to (n, n) and
+       crashes .sample().
+    2. skpro's default _predict_var falls back to calling _predict_proba,
+       which in turn here would call predict_var again → infinite recursion
+       once we override _predict_proba.
+
+    This override gets sigma directly from MAPIE's predict_interval (the
+    method MAPIE actually implements) and constructs a properly-shaped
+    Normal distribution.
     """
 
     def _predict_proba(self, X):
+        from scipy.stats import norm
         from skpro.distributions.normal import Normal
 
         pred_mean = self.predict(X=X)
-        pred_var = self.predict_var(X=X)
-        pred_std = np.sqrt(pred_var)
+
+        # Derive sigma from a 50%-coverage prediction interval: the IQR of a
+        # Normal divided by 2 * norm.ppf(0.75) is its standard deviation.
+        pred_int = self._predict_interval(X=X, coverage=[0.5])
+        var_name = pred_int.columns.get_level_values(0).unique()[0]
+        iqr = pred_int[var_name].iloc[:, 1] - pred_int[var_name].iloc[:, 0]
+        pred_std = (iqr / (2 * norm.ppf(0.75))).to_frame()
 
         if hasattr(X, "index"):
             index = X.index
@@ -236,10 +248,10 @@ class FixedMapieCrossConformalRegressor(MapieCrossConformalRegressor):
             index = pd.RangeIndex(start=0, stop=len(X), step=1)
         columns = self._get_columns(method="predict")
 
-        # Coerce mu to a DataFrame matching sigma's shape to prevent
-        # numpy broadcasting from inflating Normal.shape.
         if not isinstance(pred_mean, pd.DataFrame):
             pred_mean = pd.DataFrame(pred_mean, index=index, columns=columns)
+        pred_std.index = index
+        pred_std.columns = columns
 
         return Normal(mu=pred_mean, sigma=pred_std, index=index, columns=columns)
 

@@ -16,6 +16,7 @@ from simple_multistep_model import (
     BucketCalculator,
     BucketedResidualBootstrapModel,
     DataFrameMultistepModel,
+    FixedMapieCrossConformalRegressor,
     RunConfig,
     SkproWrapper,
     load_run_config,
@@ -99,13 +100,14 @@ def train(train_data_path: str, model_path: str, config_path: str | None = None)
             random_state=cfg.rf.random_state,
         )
 
-    if cfg.use_residual_bucketing:
+    bucket_calculator = None
+    if cfg.prob_wrapper == "bucketedresidual":
         one_step = BucketedResidualBootstrapModel(regressor)
         bucket_calculator = BucketCalculator(min_bucket_size=cfg.min_bucket_size)
-    else:
-        skpro_model = BootstrapRegressor(regressor)
-        one_step = SkproWrapper(skpro_model)
-        bucket_calculator = None
+    elif cfg.prob_wrapper == "bootstrap":
+        one_step = SkproWrapper(BootstrapRegressor(regressor))
+    elif cfg.prob_wrapper == "cross-conformal":
+        one_step = SkproWrapper(FixedMapieCrossConformalRegressor(regressor))
 
     model = DataFrameMultistepModel(
         one_step,

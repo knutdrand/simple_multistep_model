@@ -53,7 +53,7 @@ def test_debug_config_loads_cleanly():
     """The checked-in debug config validates against RunConfig."""
     cfg = load_run_config(DEBUG_CONFIG)
     assert cfg.feature_columns == ["rainfall", "mean_temperature"]
-    assert cfg.use_residual_bucketing is True
+    assert cfg.prob_wrapper == "bucketedresidual"
     assert cfg.rf.n_estimators == 5
 
 
@@ -96,7 +96,7 @@ def test_predict_writes_expected_csv(
 def test_predict_values_are_finite_and_nonnegative(
     trained_model_path: Path, tmp_path: Path, date: str
 ):
-    """Bucketed path clamps to >= 0; debug config selects it, so this must hold."""
+    """All paths clamp at the model-output boundary, so samples must be >= 0."""
     out_path = tmp_path / f"predictions_{date}.csv"
     predict_module.predict(
         str(trained_model_path),
