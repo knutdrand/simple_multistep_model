@@ -1,4 +1,4 @@
-"""Tests for RunConfig YAML loading and end-to-end train/predict via the CLI helpers."""
+"""Tests for chap-model-configuration YAML loading and end-to-end train/predict."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +8,11 @@ import pandas as pd
 import pytest
 import yaml
 
-from simple_multistep_model import ChapModelConfiguration, RunConfig, load_run_config
+from simple_multistep_model import (
+    ChapModelConfiguration,
+    RunConfig,
+    load_model_configuration,
+)
 
 # train/predict live at the repo root and are not a package - import via path.
 import sys
@@ -24,10 +28,10 @@ PERIOD = "2012-04-01"
 
 
 def test_empty_mapping_yields_defaults(tmp_path: Path):
-    """An empty `{}` wrapper is valid — all fields fall back to defaults."""
+    """An empty `{}` wrapper validates and yields default `ChapModelConfiguration`."""
     empty = tmp_path / "empty.yaml"
     empty.write_text("{}\n")
-    assert load_run_config(empty) == RunConfig()
+    assert load_model_configuration(empty) == ChapModelConfiguration()
 
 
 def test_yaml_overrides_apply(tmp_path: Path):
@@ -35,9 +39,8 @@ def test_yaml_overrides_apply(tmp_path: Path):
     yaml_path.write_text(
         yaml.safe_dump(
             {
-                "additional_continuous_covariates": [],
+                "additional_continuous_covariates": ["rainfall"],
                 "user_option_values": {
-                    "feature_columns": ["rainfall"],
                     "n_target_lags": 4,
                     "n_samples": 7,
                     "prob_wrapper": "bucketedresidual",
@@ -47,8 +50,9 @@ def test_yaml_overrides_apply(tmp_path: Path):
         )
     )
 
-    cfg = load_run_config(yaml_path)
-    assert cfg.feature_columns == ["rainfall"]
+    model_cfg = load_model_configuration(yaml_path)
+    assert model_cfg.additional_continuous_covariates == ["rainfall"]
+    cfg = model_cfg.user_option_values
     assert cfg.n_target_lags == 4
     assert cfg.n_samples == 7
     assert cfg.prob_wrapper == "bucketedresidual"
@@ -60,11 +64,23 @@ def test_yaml_overrides_apply(tmp_path: Path):
     assert cfg.min_bucket_size == RunConfig().min_bucket_size
 
 
+def test_feature_columns_inside_user_option_values_rejected(tmp_path: Path):
+    """`feature_columns` no longer lives under `user_option_values`."""
+    yaml_path = tmp_path / "legacy.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump(
+            {"user_option_values": {"feature_columns": ["rainfall"]}}
+        )
+    )
+    with pytest.raises(Exception):
+        load_model_configuration(yaml_path)
+
+
 def test_unknown_field_at_wrapper_level_rejected(tmp_path: Path):
     yaml_path = tmp_path / "bad.yaml"
     yaml_path.write_text(yaml.safe_dump({"not_a_real_field": 1}))
     with pytest.raises(Exception):
-        load_run_config(yaml_path)
+        load_model_configuration(yaml_path)
 
 
 def test_unknown_field_inside_user_option_values_rejected(tmp_path: Path):
@@ -73,7 +89,7 @@ def test_unknown_field_inside_user_option_values_rejected(tmp_path: Path):
         yaml.safe_dump({"user_option_values": {"not_a_real_field": 1}})
     )
     with pytest.raises(Exception):
-        load_run_config(yaml_path)
+        load_model_configuration(yaml_path)
 
 
 def test_chap_wrapper_shape_round_trips():
@@ -90,13 +106,12 @@ def test_chap_wrapper_shape_round_trips():
 )
 def test_train_predict_end_to_end_with_yaml(tmp_path: Path, prob_wrapper: str):
     """train.train and predict.predict run against the test fixtures with a YAML config."""
-    cfg_path = tmp_path / "run_config.yaml"
+    cfg_path = tmp_path / "model_configuration_for_run.yaml"
     cfg_path.write_text(
         yaml.safe_dump(
             {
-                "additional_continuous_covariates": [],
+                "additional_continuous_covariates": ["rainfall", "mean_temperature"],
                 "user_option_values": {
-                    "feature_columns": ["rainfall", "mean_temperature"],
                     "n_target_lags": 6,
                     "n_samples": 25,
                     "prob_wrapper": prob_wrapper,
@@ -139,15 +154,3 @@ def test_train_predict_end_to_end_with_yaml(tmp_path: Path, prob_wrapper: str):
     samples = preds[sample_cols].to_numpy()
     assert np.isfinite(samples).all()
     assert (samples >= 0).all()
-
-
-def test_train_with_no_config_path_uses_defaults_for_features(tmp_path: Path):
-    """Without a config, train falls back to the default feature_columns.
-
-    The bundled test data lacks `mean_relative_humidity`, so the default
-    config should fail with a clear KeyError - this guards against silently
-    accepting incompatible data.
-    """
-    model_path = tmp_path / "model.pkl"
-    with pytest.raises(KeyError):
-        train_module.train(str(TEST_DATA / "training_data.csv"), str(model_path), None)

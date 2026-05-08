@@ -13,7 +13,7 @@ from simple_multistep_model.run_config import (
     ChapModelConfiguration,
     RandomForestConfig,
     RunConfig,
-    load_run_config,
+    load_model_configuration,
 )
 from simple_multistep_model.multistep import (
     DataFrameMultistepModel,
@@ -50,7 +50,7 @@ __all__ = [
     "RandomForestConfig",
     "RunConfig",
     "create_cli_app",
-    "load_run_config",
+    "load_model_configuration",
     "target_to_xarray",
     "features_to_xarray",
     "future_features_to_xarray",
