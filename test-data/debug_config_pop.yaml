@@ -1,0 +1,23 @@
+# Same as debug_config.yaml but with normalize_by_population enabled.
+target_variable: disease_cases
+feature_columns:
+  - rainfall
+  - mean_temperature
+
+n_target_lags: 6
+n_samples: 20
+
+feature_min_lag: 1
+feature_max_lag: 3
+
+use_residual_bucketing: true
+min_bucket_size: 3
+
+normalize_by_population: true
+
+rf:
+  n_estimators: 5
+  max_depth: 3
+  min_samples_leaf: 2
+  max_features: sqrt
+  random_state: 0

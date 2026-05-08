@@ -67,6 +67,7 @@ class RunConfig(BaseModel):
     min_bucket_size: int = 5
 
     log_transform_target: bool = True
+    normalize_by_population: bool = False
     tune_regressor: bool = False
 
     rf: RandomForestConfig = Field(default_factory=RandomForestConfig)
