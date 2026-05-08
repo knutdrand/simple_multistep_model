@@ -10,6 +10,7 @@ Compose these pieces to build a forecasting pipeline:
 
 from simple_multistep_model.bucket_calculator import BucketCalculator
 from simple_multistep_model.run_config import (
+    ChapModelConfiguration,
     RandomForestConfig,
     RunConfig,
     load_run_config,
@@ -45,6 +46,7 @@ __all__ = [
     "ResidualBootstrapModel",
     "ResidualDistribution",
     "SkproWrapper",
+    "ChapModelConfiguration",
     "RandomForestConfig",
     "RunConfig",
     "create_cli_app",

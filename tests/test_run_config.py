@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from simple_multistep_model import RunConfig, load_run_config
+from simple_multistep_model import ChapModelConfiguration, RunConfig, load_run_config
 
 # train/predict live at the repo root and are not a package - import via path.
 import sys
@@ -24,7 +24,7 @@ PERIOD = "2012-04-01"
 
 
 def test_empty_mapping_yields_defaults(tmp_path: Path):
-    """An empty `{}` mapping is a valid RunConfig (all fields have defaults)."""
+    """An empty `{}` wrapper is valid — all fields fall back to defaults."""
     empty = tmp_path / "empty.yaml"
     empty.write_text("{}\n")
     assert load_run_config(empty) == RunConfig()
@@ -35,11 +35,14 @@ def test_yaml_overrides_apply(tmp_path: Path):
     yaml_path.write_text(
         yaml.safe_dump(
             {
-                "feature_columns": ["rainfall"],
-                "n_target_lags": 4,
-                "n_samples": 7,
-                "prob_wrapper": "bucketedresidual",
-                "rf": {"n_estimators": 11, "max_depth": 3, "random_state": 1},
+                "additional_continuous_covariates": [],
+                "user_option_values": {
+                    "feature_columns": ["rainfall"],
+                    "n_target_lags": 4,
+                    "n_samples": 7,
+                    "prob_wrapper": "bucketedresidual",
+                    "rf": {"n_estimators": 11, "max_depth": 3, "random_state": 1},
+                },
             }
         )
     )
@@ -57,11 +60,29 @@ def test_yaml_overrides_apply(tmp_path: Path):
     assert cfg.min_bucket_size == RunConfig().min_bucket_size
 
 
-def test_unknown_field_rejected(tmp_path: Path):
+def test_unknown_field_at_wrapper_level_rejected(tmp_path: Path):
     yaml_path = tmp_path / "bad.yaml"
     yaml_path.write_text(yaml.safe_dump({"not_a_real_field": 1}))
     with pytest.raises(Exception):
         load_run_config(yaml_path)
+
+
+def test_unknown_field_inside_user_option_values_rejected(tmp_path: Path):
+    yaml_path = tmp_path / "bad_inner.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump({"user_option_values": {"not_a_real_field": 1}})
+    )
+    with pytest.raises(Exception):
+        load_run_config(yaml_path)
+
+
+def test_chap_wrapper_shape_round_trips():
+    """The shape chap eval dumps as model_configuration_for_run.yaml validates."""
+    wrapper = ChapModelConfiguration.model_validate(
+        {"additional_continuous_covariates": [], "user_option_values": {}}
+    )
+    assert wrapper.user_option_values == RunConfig()
+    assert wrapper.additional_continuous_covariates == []
 
 
 @pytest.mark.parametrize(
@@ -73,16 +94,19 @@ def test_train_predict_end_to_end_with_yaml(tmp_path: Path, prob_wrapper: str):
     cfg_path.write_text(
         yaml.safe_dump(
             {
-                "feature_columns": ["rainfall", "mean_temperature"],
-                "n_target_lags": 6,
-                "n_samples": 25,
-                "prob_wrapper": prob_wrapper,
-                "min_bucket_size": 3,
-                "rf": {
-                    "n_estimators": 20,
-                    "max_depth": 5,
-                    "min_samples_leaf": 5,
-                    "random_state": 0,
+                "additional_continuous_covariates": [],
+                "user_option_values": {
+                    "feature_columns": ["rainfall", "mean_temperature"],
+                    "n_target_lags": 6,
+                    "n_samples": 25,
+                    "prob_wrapper": prob_wrapper,
+                    "min_bucket_size": 3,
+                    "rf": {
+                        "n_estimators": 20,
+                        "max_depth": 5,
+                        "min_samples_leaf": 5,
+                        "random_state": 0,
+                    },
                 },
             }
         )
