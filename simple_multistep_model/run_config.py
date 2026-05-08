@@ -72,11 +72,33 @@ class RunConfig(BaseModel):
     rf: RandomForestConfig = Field(default_factory=RandomForestConfig)
 
 
-def load_run_config(path: str | Path) -> RunConfig:
-    """Load and validate a RunConfig from a YAML file.
+class ChapModelConfiguration(BaseModel):
+    """Wrapper YAML that ``chap eval``/``chap forecast`` hands to the model.
 
-    The file must exist and contain a YAML mapping with valid RunConfig
-    fields. An empty `{}` mapping is fine and yields all defaults.
+    The user passes their config to chap via ``--model-configuration-yaml``
+    already in this shape: model-specific knobs under ``user_option_values``
+    and any extra covariate columns the data carries listed under
+    ``additional_continuous_covariates``. chap validates that file, then
+    writes it through to ``model_configuration_for_run.yaml`` in the run
+    directory for ``train``/``predict`` to read. Mirrors
+    ``chap_core.database.model_templates_and_config_tables.ModelConfiguration``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    additional_continuous_covariates: list[str] = Field(default_factory=list)
+    user_option_values: RunConfig = Field(default_factory=RunConfig)
+
+
+def load_run_config(path: str | Path) -> RunConfig:
+    """Load and validate a RunConfig from a chap model-configuration YAML.
+
+    The file must contain a YAML mapping in the shape chap writes as
+    ``model_configuration_for_run.yaml`` (see :class:`ChapModelConfiguration`):
+    the user's options live under ``user_option_values`` and any extra
+    covariate names under ``additional_continuous_covariates``. An empty
+    ``{}`` mapping is fine and yields all defaults.
     """
     with Path(path).open("r") as f:
-        return RunConfig.model_validate(yaml.safe_load(f))
+        wrapper = ChapModelConfiguration.model_validate(yaml.safe_load(f))
+    return wrapper.user_option_values

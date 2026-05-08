@@ -1,4 +1,7 @@
-# Minimal RunConfig used by the test suite.
+# Minimal model_configuration_for_run.yaml used by the test suite.
+#
+# Mirrors the shape `chap eval` writes: the actual RunConfig knobs live
+# under `user_option_values`, alongside `additional_continuous_covariates`.
 #
 # - feature_columns matches the columns actually present in the bundled
 #   training/historic/future CSVs (no mean_relative_humidity).
@@ -6,23 +9,25 @@
 #   stay fast.
 # - prob_wrapper=bucketedresidual exercises the residual-bucketing path
 #   end-to-end in the test suite.
-target_variable: disease_cases
-feature_columns:
-  - rainfall
-  - mean_temperature
+additional_continuous_covariates: []
+user_option_values:
+  target_variable: disease_cases
+  feature_columns:
+    - rainfall
+    - mean_temperature
 
-n_target_lags: 6
-n_samples: 20
+  n_target_lags: 6
+  n_samples: 20
 
-feature_min_lag: 1
-feature_max_lag: 3
+  feature_min_lag: 1
+  feature_max_lag: 3
 
-prob_wrapper: bucketedresidual
-min_bucket_size: 3
+  prob_wrapper: bucketedresidual
+  min_bucket_size: 3
 
-rf:
-  n_estimators: 5
-  max_depth: 3
-  min_samples_leaf: 2
-  max_features: sqrt
-  random_state: 0
+  rf:
+    n_estimators: 5
+    max_depth: 3
+    min_samples_leaf: 2
+    max_features: sqrt
+    random_state: 0
