@@ -15,11 +15,11 @@ from transformations import transform_data, add_lagged_targets
 from simple_multistep_model import (
     BucketCalculator,
     BucketedResidualBootstrapModel,
+    ChapModelConfiguration,
     DataFrameMultistepModel,
     FixedMapieCrossConformalRegressor,
-    RunConfig,
     SkproWrapper,
-    load_run_config,
+    load_model_configuration,
 )
 
 INDEX_COLS = ["time_period", "location"]
@@ -76,11 +76,15 @@ def choose_regressor(
 
 
 def train(train_data_path: str, model_path: str, config_path: str | None = None) -> None:
-    cfg = load_run_config(config_path) if config_path else RunConfig()
+    model_cfg = (
+        load_model_configuration(config_path) if config_path else ChapModelConfiguration()
+    )
+    cfg = model_cfg.user_option_values
+    feature_columns = model_cfg.additional_continuous_covariates
 
     data = pd.read_csv(train_data_path)
     y = data[INDEX_COLS + [cfg.target_variable]]
-    X = data[INDEX_COLS + cfg.feature_columns]
+    X = data[INDEX_COLS + feature_columns]
     X = transform_data(X, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
 
     if cfg.tune_regressor:
@@ -131,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         default=None,
-        help="Optional path to a RunConfig YAML file (defaults are used if omitted)",
+        help="Optional path to a chap model_configuration_for_run.yaml (defaults are used if omitted)",
     )
     args = parser.parse_args()
 

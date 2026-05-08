@@ -5,7 +5,11 @@ import pickle
 
 import pandas as pd
 
-from simple_multistep_model import DataFrameMultistepModel, RunConfig, load_run_config
+from simple_multistep_model import (
+    ChapModelConfiguration,
+    DataFrameMultistepModel,
+    load_model_configuration,
+)
 from transformations import transform_data
 
 INDEX_COLS = ["time_period", "location"]
@@ -18,7 +22,11 @@ def predict(
     out_file_path: str,
     config_path: str | None = None,
 ) -> None:
-    cfg = load_run_config(config_path) if config_path else RunConfig()
+    model_cfg = (
+        load_model_configuration(config_path) if config_path else ChapModelConfiguration()
+    )
+    cfg = model_cfg.user_option_values
+    feature_columns = model_cfg.additional_continuous_covariates
 
     with open(model_path, "rb") as f:
         model: DataFrameMultistepModel = pickle.load(f)
@@ -26,7 +34,7 @@ def predict(
     historic = pd.read_csv(historic_data_path)
     future = pd.read_csv(future_data_path)
     n_steps = future.groupby("location").size().iloc[0]
-    x_columns = INDEX_COLS + cfg.feature_columns
+    x_columns = INDEX_COLS + feature_columns
     features = pd.concat([historic[x_columns], future[x_columns]], ignore_index=True)
     features = features.sort_values(by=["time_period", "location"])
     X = transform_data(features, min_lag=cfg.feature_min_lag, max_lag=cfg.feature_max_lag)
@@ -45,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config",
         default=None,
-        help="Optional path to a RunConfig YAML file (defaults are used if omitted)",
+        help="Optional path to a chap model_configuration_for_run.yaml (defaults are used if omitted)",
     )
     args = parser.parse_args()
 
