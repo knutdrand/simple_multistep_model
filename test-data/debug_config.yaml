@@ -1,20 +1,21 @@
 # Minimal model_configuration_for_run.yaml used by the test suite.
 #
-# Mirrors the shape `chap eval` writes: the actual RunConfig knobs live
-# under `user_option_values`, alongside `additional_continuous_covariates`.
+# Mirrors the shape `chap eval` writes: covariate columns live at the
+# wrapper level under `additional_continuous_covariates`; everything
+# else under `user_option_values`.
 #
-# - feature_columns matches the columns actually present in the bundled
-#   training/historic/future CSVs (no mean_relative_humidity).
+# - additional_continuous_covariates matches the climate columns
+#   actually present in the bundled training/historic/future CSVs
+#   (no mean_relative_humidity).
 # - RandomForest knobs are deliberately tiny so the train/predict tests
 #   stay fast.
 # - prob_wrapper=bucketedresidual exercises the residual-bucketing path
 #   end-to-end in the test suite.
-additional_continuous_covariates: []
+additional_continuous_covariates:
+  - rainfall
+  - mean_temperature
 user_option_values:
   target_variable: disease_cases
-  feature_columns:
-    - rainfall
-    - mean_temperature
 
   n_target_lags: 6
   n_samples: 20

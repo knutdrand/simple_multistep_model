@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import predict as predict_module  # noqa: E402
 import train as train_module  # noqa: E402
 
-from simple_multistep_model import load_run_config  # noqa: E402
+from simple_multistep_model import load_model_configuration  # noqa: E402
 
 TEST_DATA = REPO_ROOT / "test-data"
 DEBUG_CONFIG = TEST_DATA / "debug_config.yaml"
@@ -50,9 +50,10 @@ def trained_model_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def test_debug_config_loads_cleanly():
-    """The checked-in debug config validates against RunConfig."""
-    cfg = load_run_config(DEBUG_CONFIG)
-    assert cfg.feature_columns == ["rainfall", "mean_temperature"]
+    """The checked-in debug config validates against ChapModelConfiguration."""
+    model_cfg = load_model_configuration(DEBUG_CONFIG)
+    assert model_cfg.additional_continuous_covariates == ["rainfall", "mean_temperature"]
+    cfg = model_cfg.user_option_values
     assert cfg.prob_wrapper == "bucketedresidual"
     assert cfg.rf.n_estimators == 5
 
@@ -79,7 +80,7 @@ def test_predict_writes_expected_csv(
     assert out_path.exists()
     preds = pd.read_csv(out_path)
 
-    cfg = load_run_config(DEBUG_CONFIG)
+    cfg = load_model_configuration(DEBUG_CONFIG).user_option_values
     sample_cols = [c for c in preds.columns if c.startswith("sample_")]
     assert sample_cols == [f"sample_{i}" for i in range(cfg.n_samples)]
     assert set(preds.columns) == {"time_period", "location"} | set(sample_cols)

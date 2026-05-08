@@ -1,23 +1,30 @@
 """Pydantic config for one train/predict run.
 
-A run config is normally loaded from a YAML file and threaded through both
-`train.py` and `predict.py` so that knobs (feature columns, lag depth,
-sample count, regressor params, probabilistic-wrapper choice, ...) live in
-one place rather than scattered as module-level constants.
+A run config is normally loaded from the YAML chap writes as
+``model_configuration_for_run.yaml`` and threaded through both
+``train.py`` and ``predict.py`` so that knobs (lag depth, sample count,
+regressor params, probabilistic-wrapper choice, ...) live in one place
+rather than scattered as module-level constants. The list of covariate
+columns the model should consume comes in via the chap-level
+``additional_continuous_covariates`` field, *not* via a knob inside
+``RunConfig``.
 
 Example YAML::
 
-    target_variable: disease_cases
-    feature_columns: [rainfall, mean_temperature]
-    n_target_lags: 6
-    n_samples: 100
-    prob_wrapper: bootstrap
-    rf:
-      n_estimators: 100
-      max_depth: 10
-      min_samples_leaf: 5
-      max_features: sqrt
-      random_state: 42
+    additional_continuous_covariates:
+      - rainfall
+      - mean_temperature
+    user_option_values:
+      target_variable: disease_cases
+      n_target_lags: 6
+      n_samples: 100
+      prob_wrapper: bootstrap
+      rf:
+        n_estimators: 100
+        max_depth: 10
+        min_samples_leaf: 5
+        max_features: sqrt
+        random_state: 42
 """
 
 from __future__ import annotations
@@ -49,13 +56,6 @@ class RunConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_variable: str = "disease_cases"
-    feature_columns: list[str] = Field(
-        default_factory=lambda: [
-            "rainfall",
-            "mean_temperature",
-            "mean_relative_humidity",
-        ]
-    )
 
     n_target_lags: int = 6
     n_samples: int = 100
@@ -90,15 +90,15 @@ class ChapModelConfiguration(BaseModel):
     user_option_values: RunConfig = Field(default_factory=RunConfig)
 
 
-def load_run_config(path: str | Path) -> RunConfig:
-    """Load and validate a RunConfig from a chap model-configuration YAML.
+def load_model_configuration(path: str | Path) -> ChapModelConfiguration:
+    """Load and validate a chap model-configuration YAML.
 
     The file must contain a YAML mapping in the shape chap writes as
     ``model_configuration_for_run.yaml`` (see :class:`ChapModelConfiguration`):
-    the user's options live under ``user_option_values`` and any extra
-    covariate names under ``additional_continuous_covariates``. An empty
-    ``{}`` mapping is fine and yields all defaults.
+    the user's options live under ``user_option_values`` and the list of
+    covariate columns under ``additional_continuous_covariates``. An empty
+    ``{}`` mapping is fine and yields all defaults (which means *no*
+    covariate columns).
     """
     with Path(path).open("r") as f:
-        wrapper = ChapModelConfiguration.model_validate(yaml.safe_load(f))
-    return wrapper.user_option_values
+        return ChapModelConfiguration.model_validate(yaml.safe_load(f))
