@@ -20,9 +20,9 @@ from simple_multistep_model.multistep import (
     DeterministicMultistepModel,
     MultistepModel,
     MultistepDistribution,
+    remove_nan_rows,
     target_to_xarray,
     features_to_xarray,
-    future_features_to_xarray,
 )
 from simple_multistep_model.one_step_model import (
     BucketedResidualBootstrapModel,
@@ -51,7 +51,7 @@ __all__ = [
     "RunConfig",
     "create_cli_app",
     "load_model_configuration",
+    "remove_nan_rows",
     "target_to_xarray",
     "features_to_xarray",
-    "future_features_to_xarray",
 ]
