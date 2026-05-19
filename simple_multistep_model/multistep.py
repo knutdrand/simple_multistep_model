@@ -83,6 +83,24 @@ def _lags_as_features(lags: xr.DataArray, n_lags: int) -> xr.DataArray:
 
 
 # ---------------------------------------------------------------------------
+# NaN-row filtering
+# ---------------------------------------------------------------------------
+
+
+def _nan_row_mask(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Boolean mask: True for rows where X has no NaN and y is not NaN."""
+    return ~(np.isnan(X).any(axis=1) | np.isnan(y))
+
+
+def remove_nan_rows(
+    X: np.ndarray, y: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Drop rows where any column in X is NaN or y is NaN."""
+    mask = _nan_row_mask(X, y)
+    return X[mask], y[mask]
+
+
+# ---------------------------------------------------------------------------
 # bucket_id annotation
 # ---------------------------------------------------------------------------
 
@@ -104,14 +122,23 @@ def _add_bucket_id_column(features: xr.DataArray, bucket_ids: np.ndarray) -> xr.
 # ---------------------------------------------------------------------------
 
 
-def target_to_xarray(y_df, target_variable: str = "disease_cases") -> xr.DataArray:
-    """Pivot target DataFrame to xr.DataArray (location, time)."""
+def target_to_xarray(
+    y_df, target_variable: str = "disease_cases", ffill: bool = False
+) -> xr.DataArray:
+    """Pivot target DataFrame to xr.DataArray (location, time).
+
+    With ``ffill=True``, forward-fills within each location after pivot.
+    Used by the predict path; the fit path leaves NaN to be handled by
+    the model's drop mask.
+    """
     import pandas as pd
 
     df = y_df.copy()
     df["time_period"] = pd.to_datetime(df["time_period"])
     target_wide = df.pivot(index="time_period", columns="location", values=target_variable)
-    target_wide = target_wide.sort_index().ffill().bfill()
+    target_wide = target_wide.sort_index()
+    if ffill:
+        target_wide = target_wide.ffill()
     locations = list(target_wide.columns)
     times = list(target_wide.index)
     return xr.DataArray(
@@ -121,8 +148,13 @@ def target_to_xarray(y_df, target_variable: str = "disease_cases") -> xr.DataArr
     )
 
 
-def features_to_xarray(X_df) -> xr.DataArray | None:
-    """Pivot features DataFrame to xr.DataArray (location, time, feature) with feature names."""
+def features_to_xarray(X_df, ffill: bool = False) -> xr.DataArray | None:
+    """Pivot features DataFrame to xr.DataArray (location, time, feature) with feature names.
+
+    With ``ffill=True``, forward-fills within each location after pivot.
+    Used by the predict path; the fit path leaves NaN to be handled by
+    the model's drop mask.
+    """
     import pandas as pd
 
     index_cols = ["time_period", "location"]
@@ -136,7 +168,9 @@ def features_to_xarray(X_df) -> xr.DataArray | None:
     feature_arrays = []
     for var in feature_cols:
         var_wide = df.pivot(index="time_period", columns="location", values=var)
-        var_wide = var_wide.sort_index().ffill().bfill()
+        var_wide = var_wide.sort_index()
+        if ffill:
+            var_wide = var_wide.ffill()
         feature_arrays.append(var_wide.values.T)
 
     locations = sorted(df["location"].unique().tolist())
@@ -146,33 +180,6 @@ def features_to_xarray(X_df) -> xr.DataArray | None:
         np.stack(feature_arrays, axis=-1),
         dims=["location", "time", "feature"],
         coords={"location": locations, "time": times, "feature": feature_cols},
-    )
-
-
-def future_features_to_xarray(X_df) -> xr.DataArray | None:
-    """Pivot future features DataFrame to xr.DataArray (location, step, feature)."""
-    import pandas as pd
-
-    index_cols = ["time_period", "location"]
-    feature_cols = [c for c in X_df.columns if c not in index_cols]
-    if not feature_cols:
-        return None
-
-    df = X_df.copy()
-    df["time_period"] = pd.to_datetime(df["time_period"])
-    locations = sorted(df["location"].unique().tolist())
-
-    feature_arrays = []
-    for var in feature_cols:
-        var_wide = df.pivot(index="time_period", columns="location", values=var)
-        var_wide = var_wide.sort_index().ffill().bfill()
-        var_wide = var_wide[locations]
-        feature_arrays.append(var_wide.values.T)
-
-    return xr.DataArray(
-        np.stack(feature_arrays, axis=-1),
-        dims=["location", "step", "feature"],
-        coords={"location": locations, "feature": feature_cols},
     )
 
 
@@ -327,8 +334,7 @@ class MultistepModel:
         else:
             features = lags_feat
 
-        values = features.values
-        mask = ~(np.isnan(values).any(axis=1) | np.isnan(y_target))
+        mask = _nan_row_mask(features.values, y_target)
         self.one_step_model.fit(features.isel(time=mask), y_target[mask])
 
     def fit_multi(self, y: xr.DataArray, X: xr.DataArray | None = None) -> None:
@@ -351,9 +357,8 @@ class MultistepModel:
         )
         y_stacked = y_target.stack(sample=("location", "time"))
 
-        values = features_stacked.values
         y_np = y_stacked.values
-        mask = ~(np.isnan(values).any(axis=1) | np.isnan(y_np))
+        mask = _nan_row_mask(features_stacked.values, y_np)
 
         if self.bucket_calculator is not None:
             sample_index = y_stacked.coords["sample"].to_index()
@@ -497,10 +502,10 @@ class DataFrameMultistepModel:
         if self._log_transform_target:
             y_historic = y_historic.copy()
             y_historic[self._target_variable] = np.log1p(y_historic[self._target_variable])
-        y_xr = target_to_xarray(y_historic, self._target_variable)
+        y_xr = target_to_xarray(y_historic, self._target_variable, ffill=True)
         previous_y = y_xr.isel(time=slice(-self._model.n_target_lags, None))
 
-        X_xr = features_to_xarray(X)
+        X_xr = features_to_xarray(X, ffill=True)
         X_future_xr = X_xr.isel(time=slice(-n_steps, None)).rename({"time": "step"})
         future_df = X.groupby("location", sort=False).tail(n_steps)
 
@@ -550,10 +555,8 @@ class DeterministicMultistepModel:
         else:
             features = lags.rename(lag="feature")
 
-        X_np = features.values
-        y_np = y_target
-        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
-        self.one_step_model.fit(X_np[mask], y_np[mask])
+        X_np, y_np = remove_nan_rows(features.values, y_target)
+        self.one_step_model.fit(X_np, y_np)
 
     def fit_multi(self, y: xr.DataArray, X: xr.DataArray | None = None) -> None:
         lags = _build_lag_matrix_xr(y, self.n_target_lags)
@@ -574,8 +577,8 @@ class DeterministicMultistepModel:
 
         X_np = features_stacked.transpose("sample", "feature").values
         y_np = y_stacked.values
-        mask = ~(np.isnan(X_np).any(axis=1) | np.isnan(y_np))
-        self.one_step_model.fit(X_np[mask], y_np[mask])
+        X_np, y_np = remove_nan_rows(X_np, y_np)
+        self.one_step_model.fit(X_np, y_np)
 
     def predict(
         self,
