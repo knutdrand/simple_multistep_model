@@ -2,6 +2,48 @@ name: simple_multistep_example
 
 uv_env: pyproject.toml
 
+# Options exposed to chap-core. These mirror `RunConfig` in
+# simple_multistep_model/run_config.py and populate the model template's
+# `user_option_values` schema. Every entry declares a `default`, so none are
+# required (chap-core marks an option required only when it has no `default`).
+user_options:
+  target_variable:
+    type: string
+    default: disease_cases
+  n_target_lags:
+    type: integer
+    default: 6
+  n_samples:
+    type: integer
+    default: 100
+  feature_min_lag:
+    type: integer
+    default: 1
+  feature_max_lag:
+    type: integer
+    default: 3
+  prob_wrapper:
+    type: string
+    enum: [bucketedresidual, bootstrap, cross-conformal]
+    default: bootstrap
+  min_bucket_size:
+    type: integer
+    default: 5
+  log_transform_target:
+    type: boolean
+    default: true
+  tune_regressor:
+    type: boolean
+    default: false
+  rf:
+    type: object
+    default:
+      n_estimators: 100
+      max_depth: 10
+      min_samples_leaf: 5
+      max_features: sqrt
+      random_state: 42
+
 entry_points:
   train:
     parameters:
